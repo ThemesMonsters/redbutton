@@ -17,6 +17,7 @@ export const botConfigTable = pgTable("bot_config", {
   averagingThresholdPercent: numeric("averaging_threshold_percent", { precision: 10, scale: 4 }).notNull().default("80"),
   maxAveragingCount: integer("max_averaging_count").notNull().default(2),
   slippagePercent: numeric("slippage_percent", { precision: 10, scale: 4 }).notNull().default("0.05"),
+  takerFeeRate: numeric("taker_fee_rate", { precision: 10, scale: 6 }).notNull().default("0.00055"),
   indicatorLookback: integer("indicator_lookback").notNull().default(100),
   volumeProfileParams: jsonb("volume_profile_params").default({ lookbackBars: 100, valueBars: 20, pocTolerance: 0.001 }),
   fibonacciParams: jsonb("fibonacci_params").default({ swingLookback: 50, levels: [0.236, 0.382, 0.5, 0.618, 0.786], entryLevel: 0.618 }),

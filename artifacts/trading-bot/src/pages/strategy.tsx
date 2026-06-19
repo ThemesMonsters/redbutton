@@ -37,6 +37,7 @@ const TIMEFRAME_OPTIONS = [
 ];
 
 const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 15, 20, 25, 50, 100];
+const DEFAULT_TAKER_FEE_RATE = 0.00055; // Bybit standard linear perpetual taker fee
 
 type Preset = {
   id: number;
@@ -88,11 +89,13 @@ function PresetCard({
   onSave,
   onDelete,
   onToggle,
+  takerFeeRate,
 }: {
   preset: Preset;
   onSave: (id: number, data: Partial<Preset>) => void;
   onDelete: (id: number) => void;
   onToggle: (id: number, enabled: boolean) => void;
+  takerFeeRate: number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [form, setForm] = useState<Preset>({ ...preset });
@@ -136,6 +139,10 @@ function PresetCard({
   };
 
   const tradeNotional = form.positionSizeUsdt * form.leverage;
+  // Estimated round-trip fee (entry + exit) at current taker rate
+  const estimatedFeeUsdt = tradeNotional * takerFeeRate * 2;
+  // Net TP after fees: the backend adjusts the trigger price so that net profit = takeProfitUsdt
+  const netTpUsdt = form.takeProfitUsdt;
 
   return (
     <div className={cn("bg-card border rounded-sm transition-colors", form.enabled ? "border-border/60" : "border-border/30 opacity-60")}>
@@ -226,7 +233,10 @@ function PresetCard({
                   value={form.takeProfitUsdt}
                   onChange={e => update({ takeProfitUsdt: parseFloat(e.target.value) || 0 })}
                 />
-                <p className="text-[9px] text-muted-foreground mt-0.5">Target profit per trade</p>
+                <p className="text-[9px] text-muted-foreground mt-0.5">
+                  Guaranteed net profit: <span className="text-chart-1 font-mono">${netTpUsdt.toFixed(4)}</span>
+                  {" "}(est. fee ≈ <span className="font-mono">${estimatedFeeUsdt.toFixed(4)}</span>, TP price adjusted by bot)
+                </p>
               </div>
               <div>
                 <Label className="text-[10px] text-muted-foreground mb-1 block">Max positions</Label>
@@ -263,6 +273,8 @@ function PresetCard({
               </div>
               <p className="text-[9px] text-muted-foreground mt-1">
                 Notional = ${form.positionSizeUsdt} × {form.leverage}x = <span className="text-foreground font-mono">${tradeNotional.toFixed(2)}</span>
+                {" · "}round-trip fee ≈ <span className="font-mono">${estimatedFeeUsdt.toFixed(4)}</span>{" "}
+                (<span className="font-mono">{(takerFeeRate * form.leverage * 200).toFixed(2)}%</span> of margin)
                 {form.leverage >= 20 && <span className="text-destructive ml-2">⚠ High leverage = high risk</span>}
               </p>
             </div>
@@ -703,6 +715,35 @@ export default function Strategy() {
               </div>
             )}
 
+            {/* Taker fee rate */}
+            <div>
+              <Label className="text-[10px] text-muted-foreground mb-1.5 block">Taker fee rate</Label>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  max="0.01"
+                  className="h-7 w-24 text-xs font-mono"
+                  defaultValue={(config?.takerFeeRate ?? DEFAULT_TAKER_FEE_RATE).toString()}
+                  onBlur={async e => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val >= 0) {
+                      try {
+                        await updateConfig.mutateAsync({ data: { takerFeeRate: val } });
+                        qc.invalidateQueries({ queryKey: getGetBotConfigQueryKey() });
+                      } catch {
+                        toast({ title: "Error", description: "Failed to save fee rate", variant: "destructive" });
+                      }
+                    }
+                  }}
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  ({((config?.takerFeeRate ?? DEFAULT_TAKER_FEE_RATE) * 100).toFixed(3)}%)
+                </span>
+              </div>
+            </div>
+
             <p className="text-[10px] text-muted-foreground ml-auto">
               Mode applies to all presets simultaneously
             </p>
@@ -730,6 +771,7 @@ export default function Strategy() {
                 onSave={handleSavePreset}
                 onDelete={handleDeletePreset}
                 onToggle={handleTogglePreset}
+                takerFeeRate={config?.takerFeeRate ?? DEFAULT_TAKER_FEE_RATE}
               />
             ))
           )}

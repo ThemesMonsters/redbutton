@@ -676,6 +676,8 @@ components:
           type: integer
         slippagePercent:
           type: number
+        takerFeeRate:
+          type: number
         indicatorLookback:
           type: integer
       required:
@@ -696,6 +698,7 @@ components:
         - averagingThresholdPercent
         - maxAveragingCount
         - slippagePercent
+        - takerFeeRate
 
     BotConfigInput:
       type: object
@@ -733,6 +736,8 @@ components:
         maxAveragingCount:
           type: integer
         slippagePercent:
+          type: number
+        takerFeeRate:
           type: number
         indicatorLookback:
           type: integer
