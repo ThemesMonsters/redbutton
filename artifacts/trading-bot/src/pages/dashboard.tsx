@@ -5,15 +5,19 @@ import { Layout } from "@/components/layout";
 import {
   useGetBotStatus, useGetPnlSummary, useListPositions, useListSignals,
   useStartBot, useStopBot, useSyncPositions, useGetDailyPnl,
-  useListStrategyPresets, useClosePosition,
+  useListStrategyPresets, useClosePosition, useGetStrategyStats,
   getGetBotStatusQueryKey, getListPositionsQueryKey, getGetPnlSummaryQueryKey,
   getListSignalsQueryKey, getGetDailyPnlQueryKey, getListStrategyPresetsQueryKey,
+  getGetStrategyStatsQueryKey,
 } from "@workspace/api-client-react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import {
+  Table, TableHeader, TableBody, TableHead, TableRow, TableCell,
+} from "@/components/ui/table";
 import { TrendingUp, TrendingDown, RefreshCw, Zap, X, Wifi } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import {
@@ -220,6 +224,18 @@ function PnlChart({ data }: { data: Array<{ date: string; pnl: number }> }) {
   );
 }
 
+function fmtPnl(v: number) {
+  return `${v >= 0 ? "+" : ""}$${v.toFixed(2)}`;
+}
+
+function fmtPct(v: number) {
+  return `${(v * 100).toFixed(1)}%`;
+}
+
+function pnlColor(v: number) {
+  return v > 0 ? "text-chart-1" : v < 0 ? "text-destructive" : "text-muted-foreground";
+}
+
 export default function Dashboard() {
   useLiveOrderRelay();
   useBalanceSync();
@@ -255,6 +271,9 @@ export default function Dashboard() {
   });
   const { data: dailyData } = useGetDailyPnl({ days: 90 }, {
     query: { refetchInterval: 60000, queryKey: getGetDailyPnlQueryKey({ days: 90 }) }
+  });
+  const { data: strategyStats } = useGetStrategyStats({
+    query: { refetchInterval: 30000, queryKey: getGetStrategyStatsQueryKey() }
   });
 
   const startBot = useStartBot();
@@ -527,6 +546,66 @@ export default function Dashboard() {
               <PnlChart data={dailyData as any} />
             )}
           </div>
+        </div>
+
+        {/* ── Strategy Performance ────────────────────────────────── */}
+        <div className="bg-card border border-border/60 rounded-sm">
+          <div className="px-4 py-2.5 border-b border-border/60">
+            <span className="text-xs font-semibold uppercase tracking-widest">Strategy Performance</span>
+            <span className="text-[10px] text-muted-foreground ml-2">all closed trades · sorted by P&L</span>
+          </div>
+          {!strategyStats ? (
+            <div className="p-4 space-y-2">
+              {[0, 1, 2].map(i => <Skeleton key={i} className="h-8 w-full bg-accent/50" />)}
+            </div>
+          ) : strategyStats.length === 0 ? (
+            <div className="px-4 py-10 text-center text-xs text-muted-foreground">
+              No strategy data yet — stats appear after first closed trades
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-[10px] uppercase tracking-widest">Strategy</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Trades</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Win Rate</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Total P&L</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Avg P&L</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Best</TableHead>
+                  <TableHead className="text-[10px] uppercase tracking-widest text-right">Worst</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {[...strategyStats]
+                  .sort((a, b) => b.totalPnl - a.totalPnl || b.winRate - a.winRate)
+                  .map((s) => (
+                    <TableRow key={s.strategy}>
+                      <TableCell className="font-mono text-xs font-medium">{s.strategy.replace(/_/g, " ")}</TableCell>
+                      <TableCell className="text-right font-mono text-xs text-muted-foreground">
+                        {s.totalTrades}
+                        <span className="text-[9px] ml-1 text-chart-1/70">{s.winningTrades}W</span>
+                        <span className="text-[9px] ml-0.5 text-destructive/70">{s.losingTrades}L</span>
+                      </TableCell>
+                      <TableCell className={cn("text-right font-mono text-xs font-bold", s.winRate >= 0.5 ? "text-chart-1" : "text-destructive")}>
+                        {fmtPct(s.winRate)}
+                      </TableCell>
+                      <TableCell className={cn("text-right font-mono text-xs font-bold", pnlColor(s.totalPnl))}>
+                        {fmtPnl(s.totalPnl)}
+                      </TableCell>
+                      <TableCell className={cn("text-right font-mono text-xs", pnlColor(s.avgPnl))}>
+                        {fmtPnl(s.avgPnl)}
+                      </TableCell>
+                      <TableCell className={cn("text-right font-mono text-xs", pnlColor(s.bestTrade))}>
+                        {fmtPnl(s.bestTrade)}
+                      </TableCell>
+                      <TableCell className={cn("text-right font-mono text-xs", pnlColor(s.worstTrade))}>
+                        {fmtPnl(s.worstTrade)}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+              </TableBody>
+            </Table>
+          )}
         </div>
       </div>
     </Layout>
