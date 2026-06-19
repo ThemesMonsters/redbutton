@@ -40,6 +40,42 @@ function snapQty(symbol: string, rawQty: number, effectiveBalance: number, lever
   return null;
 }
 
+/**
+ * Compute the price move needed so that, after paying both entry and exit taker
+ * fees, the net PnL equals `targetUsdt`.
+ *
+ * For a long TP/short SL (profit direction):
+ *   net = (exit - entry) * qty - (entry + exit) * qty * rate  =>  exit = (targetUsdt + entry*qty*(1+rate)) / (qty*(1-rate))
+ *   priceMove = exit - entry = (targetUsdt + 2*entry*qty*rate) / (qty*(1-rate))
+ *
+ * For a long SL/short TP (loss direction, targetUsdt is the max loss in USDT):
+ *   total_loss = (entry - exit) * qty + (entry + exit) * qty * rate = targetUsdt
+ *   priceMove = entry - exit = (targetUsdt - 2*entry*qty*rate) / (qty*(1-rate))
+ *   Clamped to >= targetUsdt/qty so we never move the SL closer than the un-adjusted level.
+ *
+ * Falls back to simple targetUsdt/qty when rate is 0.
+ */
+function feeAdjustedPriceMove(
+  targetUsdt: number,
+  qty: number,
+  entryPrice: number,
+  feeRate: number,
+  direction: "profit" | "loss",
+): number {
+  if (feeRate <= 0 || qty <= 0) return targetUsdt / qty;
+  const denom = qty * (1 - feeRate);
+  if (denom <= 0) return targetUsdt / qty;
+  if (direction === "profit") {
+    // TP: move AWAY from entry — larger price change to cover fees
+    return (targetUsdt + 2 * entryPrice * qty * feeRate) / denom;
+  } else {
+    // SL: move TOWARD entry — smaller price change because fees add to loss
+    const raw = (targetUsdt - 2 * entryPrice * qty * feeRate) / denom;
+    // Never let fees push SL so close that it's inside the raw targetUsdt/qty band
+    return Math.max(raw, targetUsdt / qty);
+  }
+}
+
 interface BotState {
   running: boolean;
   startedAt: Date | null;
@@ -462,11 +498,12 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     return;
   }
 
-  // SL/TP: always in USDT amounts from preset
+  // SL/TP: always in USDT amounts from preset; adjust price move to yield target NET PnL after fees
   const stopLossUsdt   = parseFloat(String(preset.stopLossUsdt   ?? 1));
   const takeProfitUsdt = parseFloat(String(preset.takeProfitUsdt ?? 2));
-  const slPriceMove = stopLossUsdt   / qty;
-  const tpPriceMove = takeProfitUsdt / qty;
+  const feeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.00055));
+  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt,   qty, currentPrice, feeRate, "loss");
+  const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, "profit");
   const sl = dominant === "long" ? currentPrice - slPriceMove : currentPrice + slPriceMove;
   const tp = dominant === "long" ? currentPrice + tpPriceMove : currentPrice - tpPriceMove;
 
@@ -600,7 +637,7 @@ export async function checkPositionsTpSl() {
     const configs = await db.select().from(botConfigTable).limit(1);
     const globalConfig = configs[0];
     const slippagePct = parseFloat(String(globalConfig?.slippagePercent ?? 0.05)) / 100;
-    const takerFeeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.001));
+    const takerFeeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.00055));
 
     const presets = await getCachedPresets();
     const presetMap = new Map<string, any>(presets.map(p => [p.name, p]));
@@ -646,9 +683,9 @@ export async function checkPositionsTpSl() {
             const newQty   = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
-            // SL/TP in USDT anchored to currentPrice
-            const newSlMove = stopLossUsdt   / newQty;
-            const newTpMove = takeProfitUsdt / newQty;
+            // SL/TP in USDT anchored to currentPrice, fee-adjusted so net PnL = target
+            const newSlMove = feeAdjustedPriceMove(stopLossUsdt,   newQty, currentPrice, takerFeeRate, "loss");
+            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry,     takerFeeRate, "profit");
             const newSl = pos.side === "long" ? currentPrice - newSlMove : currentPrice + newSlMove;
             const newTp = pos.side === "long" ? newEntry + newTpMove    : newEntry - newTpMove;
 
