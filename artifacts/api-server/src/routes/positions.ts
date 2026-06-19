@@ -110,11 +110,16 @@ router.delete("/:id", async (req, res) => {
     if (!pos) { res.status(404).json({ error: "Position not found" }); return; }
 
     const price = getCurrentPrice(pos.symbol);
-    const exitPrice = price > 0 ? price : parseFloat(pos.entryPrice);
+    let exitPrice = price > 0 ? price : parseFloat(pos.entryPrice);
 
     if (pos.mode === "live" && pos.bybitOrderId) {
       const side = pos.side === "long" ? "Buy" : "Sell";
-      await closeMarketOrder(pos.symbol, side, parseFloat(pos.quantity));
+      const closeRes = await closeMarketOrder(pos.symbol, side, parseFloat(pos.quantity));
+      if (closeRes.executionPrice && closeRes.executionPrice > 0) {
+        exitPrice = closeRes.executionPrice;
+      } else {
+        req.log.warn({ positionId: pos.id, symbol: pos.symbol }, "Manual close: Bybit execution price unavailable, using market-feed fallback");
+      }
     }
 
     const qty = parseFloat(pos.quantity);

@@ -680,11 +680,11 @@ export async function checkPositionsTpSl() {
 
         // ─── SL/TP check ─────────────────────────────────────────────────────
         if (pos.side === "long") {
-          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct); continue; }
-          if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct); continue; }
+          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl"); continue; }
+          if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp"); continue; }
         } else {
-          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct); continue; }
-          if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct); continue; }
+          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl"); continue; }
+          if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp"); continue; }
         }
       } finally {
         processingPositionIds.delete(pos.id);
@@ -695,7 +695,7 @@ export async function checkPositionsTpSl() {
   }
 }
 
-async function closePosition(pos: any, exitPrice: number, slippagePct: number) {
+async function closePosition(pos: any, triggerPrice: number, slippagePct: number, reason: "tp" | "sl") {
   const updated = await db
     .update(positionsTable)
     .set({ isOpen: false, closedAt: new Date() })
@@ -710,26 +710,52 @@ async function closePosition(pos: any, exitPrice: number, slippagePct: number) {
     const closeSide = pos.side === "long" ? "Sell" : "Buy";
     const posIdx    = pos.side === "long" ? 1 : 2;
     try {
-      await closeMarketOrder(pos.symbol, closeSide, parseFloat(pos.quantity), posIdx);
+      const closeRes = await closeMarketOrder(pos.symbol, closeSide, parseFloat(pos.quantity), posIdx);
+      if (closeRes.executionPrice && closeRes.executionPrice > 0) {
+        const pnl = computeClosedPnl(pos, closeRes.executionPrice);
+        await insertClosedTrade(pos, closeRes.executionPrice, pnl.pnl, pnl.pnlPercent);
+        logger.info(
+          { symbol: pos.symbol, reason, exitPrice: closeRes.executionPrice, pnl: pnl.pnl.toFixed(4), pnlPercent: pnl.pnlPercent.toFixed(2) + "%", preset: pos.presetName },
+          "Position closed by SL/TP using exchange execution price",
+        );
+        return;
+      }
+      logger.warn({ symbol: pos.symbol, reason, triggerPrice }, "Close order submitted, but execution price unavailable — falling back to trigger-based accounting");
     } catch (err) {
       logger.error({ err, symbol: pos.symbol }, "Failed to close position via WS-API/REST");
     }
   }
 
-  const exitWithSlippage = pos.side === "long"
-    ? exitPrice * (1 - slippagePct)
-    : exitPrice * (1 + slippagePct);
+  // Synthetic slippage is only applied for paper SL exits. For TP exits (and for
+  // live fallback when exchange fill price is unavailable), we keep trigger-price
+  // accounting so tiny TP configurations are not flipped into losses by synthetic math.
+  const shouldApplyPaperSlippage = reason === "sl" && pos.mode === "paper";
+  const accountedExit = shouldApplyPaperSlippage
+    ? (pos.side === "long" ? triggerPrice * (1 - slippagePct) : triggerPrice * (1 + slippagePct))
+    : triggerPrice;
 
+  const pnl = computeClosedPnl(pos, accountedExit);
+  await insertClosedTrade(pos, accountedExit, pnl.pnl, pnl.pnlPercent);
+  logger.info(
+    { symbol: pos.symbol, reason, exitPrice: accountedExit, pnl: pnl.pnl.toFixed(4), pnlPercent: pnl.pnlPercent.toFixed(2) + "%", preset: pos.presetName },
+    "Position closed by SL/TP",
+  );
+}
+
+function computeClosedPnl(pos: any, exitPrice: number): { pnl: number; pnlPercent: number } {
   const qty = parseFloat(pos.quantity);
   const entry = parseFloat(pos.entryPrice);
   const leverage = pos.leverage ?? 1;
-  const pnl = pos.side === "long" ? (exitWithSlippage - entry) * qty : (entry - exitWithSlippage) * qty;
+  const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
   const margin = entry > 0 && qty > 0 ? (entry * qty) / Math.max(leverage, 1) : 0;
   const pnlPercent = margin > 0 ? (pnl / margin) * 100 : 0;
+  return { pnl, pnlPercent };
+}
 
+async function insertClosedTrade(pos: any, exitPrice: number, pnl: number, pnlPercent: number) {
   await db.insert(tradesTable).values({
     symbol: pos.symbol, side: pos.side,
-    entryPrice: pos.entryPrice, exitPrice: String(exitWithSlippage),
+    entryPrice: pos.entryPrice, exitPrice: String(exitPrice),
     quantity: pos.quantity, leverage: pos.leverage,
     pnl: String(pnl), pnlPercent: String(pnlPercent),
     strategy: pos.strategy, mode: pos.mode,
@@ -739,8 +765,6 @@ async function closePosition(pos: any, exitPrice: number, slippagePct: number) {
     presetName: pos.presetName,
     openedAt: pos.openedAt,
   });
-
-  logger.info({ symbol: pos.symbol, pnl: pnl.toFixed(4), pnlPercent: pnlPercent.toFixed(2) + "%", preset: pos.presetName }, "Position closed by SL/TP");
 }
 
 const processingPositionIds = new Set<number>();
