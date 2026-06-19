@@ -1,0 +1,1432 @@
+openapi: 3.1.0
+info:
+  title: Api
+  version: 0.1.0
+  description: Crypto Trading Bot API for Bybit
+servers:
+  - url: /api
+    description: Base API path
+tags:
+  - name: health
+    description: Health operations
+  - name: bot
+    description: Bot control and configuration
+  - name: positions
+    description: Position management
+  - name: trades
+    description: Trade history
+  - name: market
+    description: Market data
+  - name: signals
+    description: Trading signals
+  - name: analytics
+    description: Analytics and P&L
+  - name: settings
+    description: Settings and data management
+
+paths:
+  /healthz:
+    get:
+      operationId: healthCheck
+      tags: [health]
+      summary: Health check
+      responses:
+        "200":
+          description: Healthy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthStatus"
+
+  /bot/status:
+    get:
+      operationId: getBotStatus
+      tags: [bot]
+      summary: Get bot status
+      responses:
+        "200":
+          description: Bot status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/start:
+    post:
+      operationId: startBot
+      tags: [bot]
+      summary: Start the trading bot
+      responses:
+        "200":
+          description: Bot started
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/stop:
+    post:
+      operationId: stopBot
+      tags: [bot]
+      summary: Stop the trading bot
+      responses:
+        "200":
+          description: Bot stopped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotStatus"
+
+  /bot/sync-positions:
+    post:
+      operationId: syncPositions
+      tags: [bot]
+      summary: Sync open positions from Bybit into the bot DB
+      responses:
+        "200":
+          description: Sync result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [imported, closed, found]
+                properties:
+                  imported:
+                    type: integer
+                  closed:
+                    type: integer
+                  found:
+                    type: integer
+
+  /bot/config:
+    get:
+      operationId: getBotConfig
+      tags: [bot]
+      summary: Get bot configuration
+      responses:
+        "200":
+          description: Bot configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+    put:
+      operationId: updateBotConfig
+      tags: [bot]
+      summary: Update bot configuration
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BotConfigInput"
+      responses:
+        "200":
+          description: Updated config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BotConfig"
+
+  /positions:
+    get:
+      operationId: listPositions
+      tags: [positions]
+      summary: List open positions
+      parameters:
+        - in: query
+          name: mode
+          schema:
+            type: string
+            enum: [paper, live, all]
+          required: false
+      responses:
+        "200":
+          description: Open positions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Position"
+    post:
+      operationId: openPosition
+      tags: [positions]
+      summary: Open a manual position
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PositionInput"
+      responses:
+        "201":
+          description: Position opened
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+
+  /positions/{id}:
+    get:
+      operationId: getPosition
+      tags: [positions]
+      summary: Get a position by ID
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Position
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+    delete:
+      operationId: closePosition
+      tags: [positions]
+      summary: Close a position
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Position closed
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Position"
+
+  /trades:
+    get:
+      operationId: listTrades
+      tags: [trades]
+      summary: List trade history
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 50
+          required: false
+        - in: query
+          name: mode
+          schema:
+            type: string
+            enum: [paper, live, all]
+          required: false
+      responses:
+        "200":
+          description: Trade history
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Trade"
+
+  /balance:
+    get:
+      operationId: getBalance
+      tags: [market]
+      summary: Get account balance
+      responses:
+        "200":
+          description: Balance info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Balance"
+
+  /market/ticker:
+    get:
+      operationId: getMarketTicker
+      tags: [market]
+      summary: Get market ticker data
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+          required: false
+      responses:
+        "200":
+          description: Ticker data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Ticker"
+
+  /market/klines:
+    get:
+      operationId: getKlines
+      tags: [market]
+      summary: Get OHLCV candlestick data
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+          required: true
+        - in: query
+          name: interval
+          schema:
+            type: string
+            enum: ["1", "5", "15", "60", "240", "D"]
+          required: false
+        - in: query
+          name: limit
+          schema:
+            type: integer
+          required: false
+      responses:
+        "200":
+          description: Candlestick data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Kline"
+
+  /market/levels:
+    get:
+      operationId: getStrategyLevels
+      tags: [market]
+      summary: Get strategy-calculated price levels for a symbol
+      parameters:
+        - in: query
+          name: symbol
+          schema:
+            type: string
+          required: true
+        - in: query
+          name: interval
+          schema:
+            type: string
+          required: false
+        - in: query
+          name: strategies
+          schema:
+            type: string
+          required: false
+      responses:
+        "200":
+          description: Strategy levels for the symbol
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyLevels"
+
+  /signals:
+    get:
+      operationId: listSignals
+      tags: [signals]
+      summary: List recent trading signals
+      parameters:
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            default: 20
+          required: false
+      responses:
+        "200":
+          description: Recent signals
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Signal"
+
+  /analytics/pnl:
+    get:
+      operationId: getPnlSummary
+      tags: [analytics]
+      summary: Get P&L summary and performance stats
+      responses:
+        "200":
+          description: P&L summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PnlSummary"
+
+  /analytics/strategies:
+    get:
+      operationId: getStrategyStats
+      tags: [analytics]
+      summary: Get per-strategy performance breakdown
+      responses:
+        "200":
+          description: Strategy stats
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StrategyStats"
+
+  /analytics/daily:
+    get:
+      operationId: getDailyPnl
+      tags: [analytics]
+      summary: Get daily P&L breakdown
+      parameters:
+        - in: query
+          name: days
+          schema:
+            type: integer
+            default: 30
+          required: false
+      responses:
+        "200":
+          description: Daily P&L data
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DailyPnl"
+
+  /settings/api-keys/status:
+    get:
+      operationId: getApiKeyStatus
+      tags: [settings]
+      summary: Get Bybit API key configuration status
+      responses:
+        "200":
+          description: API key status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyStatus"
+
+  /settings/api-keys:
+    put:
+      operationId: saveApiKeys
+      tags: [settings]
+      summary: Save Bybit API keys to database
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ApiKeysInput"
+      responses:
+        "200":
+          description: Save result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyStatus"
+    delete:
+      operationId: deleteApiKeys
+      tags: [settings]
+      summary: Remove Bybit API keys from database
+      responses:
+        "200":
+          description: Delete result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ApiKeyStatus"
+
+  /settings/stats:
+    get:
+      operationId: getSettingsStats
+      tags: [settings]
+      summary: Get counts for confirmation dialogs
+      responses:
+        "200":
+          description: Stats
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SettingsStats"
+
+  /settings/trades:
+    delete:
+      operationId: resetTradeHistory
+      tags: [settings]
+      summary: Delete all trade history
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
+
+  /settings/positions:
+    delete:
+      operationId: resetOpenPositions
+      tags: [settings]
+      summary: Force-close all open positions
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
+
+  /settings/all:
+    delete:
+      operationId: resetAll
+      tags: [settings]
+      summary: Wipe all trades and close all positions
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
+
+  /settings/reset-balance:
+    post:
+      operationId: resetPaperBalance
+      tags: [settings]
+      summary: Reset paper trading balance to $10,000
+      responses:
+        "200":
+          description: Reset result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResetResult"
+
+  /strategy-presets:
+    get:
+      operationId: listStrategyPresets
+      tags: [bot]
+      summary: List all strategy presets
+      responses:
+        "200":
+          description: List of strategy presets
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/StrategyPreset"
+    post:
+      operationId: createStrategyPreset
+      tags: [bot]
+      summary: Create a new strategy preset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyPresetInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyPreset"
+
+  /strategy-presets/{id}:
+    put:
+      operationId: updateStrategyPreset
+      tags: [bot]
+      summary: Update a strategy preset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StrategyPresetInput"
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StrategyPreset"
+    delete:
+      operationId: deleteStrategyPreset
+      tags: [bot]
+      summary: Delete a strategy preset
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        "200":
+          description: Deleted
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                required:
+                  - ok
+
+components:
+  schemas:
+    HealthStatus:
+      type: object
+      properties:
+        status:
+          type: string
+      required:
+        - status
+
+    BotStatus:
+      type: object
+      properties:
+        running:
+          type: boolean
+        mode:
+          type: string
+          enum: [paper, live]
+        activeSymbol:
+          type: string
+        uptime:
+          type: ["integer", "null"]
+        openPositionsCount:
+          type: integer
+        todayPnl:
+          type: number
+        todayPnlPercent:
+          type: number
+        lastSignalAt:
+          type: ["string", "null"]
+      required:
+        - running
+        - mode
+        - activeSymbol
+        - openPositionsCount
+        - todayPnl
+        - todayPnlPercent
+
+    BotConfig:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbols:
+          type: array
+          items:
+            type: string
+        mode:
+          type: string
+          enum: [paper, live]
+        strategies:
+          type: array
+          items:
+            type: string
+        strategyMode:
+          type: string
+          enum: [AND, OR]
+        positionSizeUsdt:
+          type: number
+        maxPositions:
+          type: integer
+        stopLossUsdt:
+          type: number
+        takeProfitUsdt:
+          type: number
+        volumeProfileParams:
+          $ref: "#/components/schemas/VolumeProfileParams"
+        fibonacciParams:
+          $ref: "#/components/schemas/FibonacciParams"
+        orderBlockParams:
+          $ref: "#/components/schemas/OrderBlockParams"
+        timeframe:
+          type: string
+        rsiParams:
+          $ref: "#/components/schemas/RsiParams"
+        updatedAt:
+          type: string
+        wsConnected:
+          type: boolean
+        paperBalance:
+          type: number
+        leverage:
+          type: integer
+        averagingEnabled:
+          type: boolean
+        averagingThresholdPercent:
+          type: number
+        maxAveragingCount:
+          type: integer
+        slippagePercent:
+          type: number
+        indicatorLookback:
+          type: integer
+      required:
+        - id
+        - symbols
+        - mode
+        - strategies
+        - strategyMode
+        - positionSizeUsdt
+        - maxPositions
+        - leverage
+        - stopLossUsdt
+        - takeProfitUsdt
+        - updatedAt
+        - wsConnected
+        - paperBalance
+        - averagingEnabled
+        - averagingThresholdPercent
+        - maxAveragingCount
+        - slippagePercent
+
+    BotConfigInput:
+      type: object
+      properties:
+        symbols:
+          type: array
+          items:
+            type: string
+        mode:
+          type: string
+          enum: [paper, live]
+        strategies:
+          type: array
+          items:
+            type: string
+        strategyMode:
+          type: string
+          enum: [AND, OR]
+        positionSizeUsdt:
+          type: number
+        maxPositions:
+          type: integer
+        leverage:
+          type: integer
+        stopLossUsdt:
+          type: number
+        takeProfitUsdt:
+          type: number
+        paperBalance:
+          type: number
+        averagingEnabled:
+          type: boolean
+        averagingThresholdPercent:
+          type: number
+        maxAveragingCount:
+          type: integer
+        slippagePercent:
+          type: number
+        indicatorLookback:
+          type: integer
+        volumeProfileParams:
+          $ref: "#/components/schemas/VolumeProfileParams"
+        fibonacciParams:
+          $ref: "#/components/schemas/FibonacciParams"
+        orderBlockParams:
+          $ref: "#/components/schemas/OrderBlockParams"
+        timeframe:
+          type: string
+        rsiParams:
+          $ref: "#/components/schemas/RsiParams"
+
+    VolumeProfileParams:
+      type: object
+      properties:
+        lookbackBars:
+          type: integer
+        valueBars:
+          type: integer
+        pocTolerance:
+          type: number
+      required:
+        - lookbackBars
+        - valueBars
+        - pocTolerance
+
+    FibonacciParams:
+      type: object
+      properties:
+        swingLookback:
+          type: integer
+        levels:
+          type: array
+          items:
+            type: number
+        entryLevel:
+          type: number
+      required:
+        - swingLookback
+        - levels
+        - entryLevel
+
+    OrderBlockParams:
+      type: object
+      properties:
+        lookbackBars:
+          type: integer
+        minImpulsePercent:
+          type: number
+        mitigation:
+          type: boolean
+      required:
+        - lookbackBars
+        - minImpulsePercent
+        - mitigation
+
+    RsiParams:
+      type: object
+      properties:
+        period:
+          type: integer
+        oversoldLevel:
+          type: number
+        overboughtLevel:
+          type: number
+      required:
+        - period
+        - oversoldLevel
+        - overboughtLevel
+
+    Position:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [long, short]
+        entryPrice:
+          type: number
+        currentPrice:
+          type: number
+        quantity:
+          type: number
+        leverage:
+          type: integer
+        unrealizedPnl:
+          type: number
+        unrealizedPnlPercent:
+          type: number
+        strategy:
+          type: string
+        mode:
+          type: string
+          enum: [paper, live]
+        stopLoss:
+          type: ["number", "null"]
+        takeProfit:
+          type: ["number", "null"]
+        openedAt:
+          type: string
+        bybitOrderId:
+          type: ["string", "null"]
+        presetName:
+          type: ["string", "null"]
+      required:
+        - id
+        - symbol
+        - side
+        - entryPrice
+        - currentPrice
+        - quantity
+        - leverage
+        - unrealizedPnl
+        - unrealizedPnlPercent
+        - strategy
+        - mode
+        - openedAt
+
+    PositionInput:
+      type: object
+      properties:
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [long, short]
+        quantity:
+          type: number
+        leverage:
+          type: integer
+        mode:
+          type: string
+          enum: [paper, live]
+        stopLoss:
+          type: number
+        takeProfit:
+          type: number
+      required:
+        - symbol
+        - side
+        - quantity
+        - leverage
+        - mode
+
+    Trade:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        side:
+          type: string
+          enum: [long, short]
+        entryPrice:
+          type: number
+        exitPrice:
+          type: number
+        quantity:
+          type: number
+        leverage:
+          type: integer
+        pnl:
+          type: number
+        pnlPercent:
+          type: number
+        strategy:
+          type: string
+        mode:
+          type: string
+          enum: [paper, live]
+        openedAt:
+          type: string
+        closedAt:
+          type: string
+        bybitOrderId:
+          type: ["string", "null"]
+        wasAveraged:
+          type: boolean
+        averageCount:
+          type: integer
+        presetName:
+          type: ["string", "null"]
+      required:
+        - id
+        - symbol
+        - side
+        - entryPrice
+        - exitPrice
+        - quantity
+        - leverage
+        - pnl
+        - pnlPercent
+        - strategy
+        - mode
+        - wasAveraged
+        - averageCount
+        - openedAt
+        - closedAt
+
+    Balance:
+      type: object
+      properties:
+        paperBalance:
+          type: number
+        liveInitialBalance:
+          type: number
+        liveBalance:
+          type: ["number", "null"]
+        liveEquity:
+          type: ["number", "null"]
+        currency:
+          type: string
+        hasApiKeys:
+          type: boolean
+      required:
+        - paperBalance
+        - liveInitialBalance
+        - currency
+        - hasApiKeys
+
+    Ticker:
+      type: object
+      properties:
+        symbol:
+          type: string
+        lastPrice:
+          type: number
+        change24h:
+          type: number
+        changePercent24h:
+          type: number
+        volume24h:
+          type: number
+        high24h:
+          type: number
+        low24h:
+          type: number
+      required:
+        - symbol
+        - lastPrice
+        - change24h
+        - changePercent24h
+        - volume24h
+        - high24h
+        - low24h
+
+    Kline:
+      type: object
+      properties:
+        timestamp:
+          type: integer
+        open:
+          type: number
+        high:
+          type: number
+        low:
+          type: number
+        close:
+          type: number
+        volume:
+          type: number
+      required:
+        - timestamp
+        - open
+        - high
+        - low
+        - close
+        - volume
+
+    StrategyLevels:
+      type: object
+      properties:
+        symbol:
+          type: string
+        currentPrice:
+          type: number
+        poc:
+          type: ["number", "null"]
+        fibHigh:
+          type: ["number", "null"]
+        fibLow:
+          type: ["number", "null"]
+        fibLevels:
+          type: array
+          items:
+            type: object
+            properties:
+              ratio:
+                type: number
+              price:
+                type: number
+              label:
+                type: string
+            required: [ratio, price, label]
+        orderBlocks:
+          type: array
+          items:
+            type: object
+            properties:
+              low:
+                type: number
+              high:
+                type: number
+              direction:
+                type: string
+                enum: [long, short]
+            required: [low, high, direction]
+        openPositions:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+              side:
+                type: string
+              entryPrice:
+                type: number
+              quantity:
+                type: number
+              leverage:
+                type: integer
+              unrealizedPnl:
+                type: number
+              stopLoss:
+                type: ["number", "null"]
+              takeProfit:
+                type: ["number", "null"]
+            required: [id, side, entryPrice, quantity, leverage, unrealizedPnl]
+        recentSignals:
+          type: array
+          items:
+            type: object
+            properties:
+              strategy:
+                type: string
+              direction:
+                type: string
+              price:
+                type: number
+              strength:
+                type: number
+              createdAt:
+                type: string
+            required: [strategy, direction, price, strength, createdAt]
+        rsiValue:
+          type: ["number", "null"]
+        rsiValues:
+          type: array
+          items:
+            type: object
+            properties:
+              time:
+                type: number
+              value:
+                type: number
+            required: [time, value]
+        volumeProfile:
+          type: array
+          items:
+            type: object
+            properties:
+              price:
+                type: number
+              volume:
+                type: number
+              relVol:
+                type: number
+            required: [price, volume, relVol]
+      required:
+        - symbol
+        - currentPrice
+        - fibLevels
+        - orderBlocks
+        - openPositions
+        - recentSignals
+
+    Signal:
+      type: object
+      properties:
+        id:
+          type: integer
+        symbol:
+          type: string
+        strategy:
+          type: string
+        direction:
+          type: string
+          enum: [long, short, neutral]
+        strength:
+          type: number
+        price:
+          type: number
+        description:
+          type: string
+        acted:
+          type: boolean
+        createdAt:
+          type: string
+      required:
+        - id
+        - symbol
+        - strategy
+        - direction
+        - strength
+        - price
+        - description
+        - acted
+        - createdAt
+
+    PnlSummary:
+      type: object
+      properties:
+        totalPnl:
+          type: number
+        totalPnlPercent:
+          type: number
+        unrealizedPnl:
+          type: number
+        currentBalance:
+          type: ["number", "null"]
+        balanceSource:
+          type: ["string", "null"]
+          enum: ["live", "calculated", null]
+        todayPnl:
+          type: number
+        weekPnl:
+          type: number
+        monthPnl:
+          type: number
+        winRate:
+          type: number
+        totalTrades:
+          type: integer
+        winningTrades:
+          type: integer
+        losingTrades:
+          type: integer
+        avgWin:
+          type: number
+        avgLoss:
+          type: number
+        profitFactor:
+          type: number
+        maxDrawdown:
+          type: number
+        paperPnl:
+          type: number
+        livePnl:
+          type: number
+      required:
+        - totalPnl
+        - totalPnlPercent
+        - unrealizedPnl
+        - todayPnl
+        - weekPnl
+        - monthPnl
+        - winRate
+        - totalTrades
+        - winningTrades
+        - losingTrades
+        - avgWin
+        - avgLoss
+        - profitFactor
+        - maxDrawdown
+        - paperPnl
+        - livePnl
+
+    DailyPnl:
+      type: object
+      properties:
+        date:
+          type: string
+        pnl:
+          type: number
+        trades:
+          type: integer
+        winRate:
+          type: number
+      required:
+        - date
+        - pnl
+        - trades
+        - winRate
+
+    SettingsStats:
+      type: object
+      properties:
+        openPositions:
+          type: integer
+        tradeHistory:
+          type: integer
+      required:
+        - openPositions
+        - tradeHistory
+
+    ResetResult:
+      type: object
+      properties:
+        deleted:
+          type: integer
+        closed:
+          type: integer
+        closedPositions:
+          type: integer
+        deletedTrades:
+          type: integer
+        paperBalance:
+          type: number
+        message:
+          type: string
+      required:
+        - message
+
+    StrategyStats:
+      type: object
+      properties:
+        strategy:
+          type: string
+        totalTrades:
+          type: integer
+        winningTrades:
+          type: integer
+        losingTrades:
+          type: integer
+        winRate:
+          type: number
+        totalPnl:
+          type: number
+        avgPnl:
+          type: number
+        bestTrade:
+          type: number
+        worstTrade:
+          type: number
+      required:
+        - strategy
+        - totalTrades
+        - winningTrades
+        - losingTrades
+        - winRate
+        - totalPnl
+        - avgPnl
+        - bestTrade
+        - worstTrade
+
+    ApiKeysInput:
+      type: object
+      properties:
+        apiKey:
+          type: string
+        apiSecret:
+          type: string
+      required:
+        - apiKey
+        - apiSecret
+
+    ApiKeyStatus:
+      type: object
+      properties:
+        configured:
+          type: boolean
+        source:
+          type: string
+          enum: [env, database, none]
+        message:
+          type: string
+      required:
+        - configured
+        - source
+
+    StrategyPreset:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        enabled:
+          type: boolean
+        symbols:
+          type: array
+          items:
+            type: string
+        strategies:
+          type: array
+          items:
+            type: string
+        strategyMode:
+          type: string
+          enum: [AND, OR]
+        positionSizeUsdt:
+          type: number
+        leverage:
+          type: integer
+        maxPositions:
+          type: integer
+        stopLossUsdt:
+          type: number
+        takeProfitUsdt:
+          type: number
+        averagingEnabled:
+          type: boolean
+        averagingThresholdPercent:
+          type: number
+        maxAveragingCount:
+          type: integer
+        averagingAmountUsdt:
+          type: number
+        timeframe:
+          type: string
+        volumeProfileParams:
+          type: object
+        fibonacciParams:
+          type: object
+        orderBlockParams:
+          type: object
+        rsiParams:
+          type: object
+        createdAt:
+          type: string
+        updatedAt:
+          type: string
+      required:
+        - id
+        - name
+        - enabled
+        - symbols
+        - strategies
+        - strategyMode
+        - positionSizeUsdt
+        - leverage
+        - maxPositions
+        - stopLossUsdt
+        - takeProfitUsdt
+        - averagingEnabled
+        - averagingThresholdPercent
+        - maxAveragingCount
+        - averagingAmountUsdt
+        - timeframe
+        - createdAt
+        - updatedAt
+
+    StrategyPresetInput:
+      type: object
+      properties:
+        name:
+          type: string
+        enabled:
+          type: boolean
+        symbols:
+          type: array
+          items:
+            type: string
+        strategies:
+          type: array
+          items:
+            type: string
+        strategyMode:
+          type: string
+          enum: [AND, OR]
+        positionSizeUsdt:
+          type: number
+        leverage:
+          type: integer
+        maxPositions:
+          type: integer
+        stopLossUsdt:
+          type: number
+        takeProfitUsdt:
+          type: number
+        averagingEnabled:
+          type: boolean
+        averagingThresholdPercent:
+          type: number
+        maxAveragingCount:
+          type: integer
+        averagingAmountUsdt:
+          type: number
+        timeframe:
+          type: string
+        volumeProfileParams:
+          type: object
+        fibonacciParams:
+          type: object
+        orderBlockParams:
+          type: object
+        rsiParams:
+          type: object
+      required:
+        - name
