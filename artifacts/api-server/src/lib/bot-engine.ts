@@ -63,8 +63,12 @@ function feeAdjustedPriceMove(
   direction: "profit" | "loss",
 ): number {
   if (feeRate <= 0 || qty <= 0) return targetUsdt / qty;
+  // feeRate >= 1 (100%) is not a realistic Bybit rate; guard against divide-by-zero
+  if (feeRate >= 1) {
+    logger.warn({ feeRate }, "feeAdjustedPriceMove: unrealistic feeRate >= 1, falling back to no-fee calculation");
+    return targetUsdt / qty;
+  }
   const denom = qty * (1 - feeRate);
-  if (denom <= 0) return targetUsdt / qty;
   if (direction === "profit") {
     // TP: move AWAY from entry — larger price change to cover fees
     return (targetUsdt + 2 * entryPrice * qty * feeRate) / denom;

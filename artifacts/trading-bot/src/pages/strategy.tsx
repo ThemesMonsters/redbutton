@@ -234,8 +234,8 @@ function PresetCard({
                   onChange={e => update({ takeProfitUsdt: parseFloat(e.target.value) || 0 })}
                 />
                 <p className="text-[9px] text-muted-foreground mt-0.5">
-                  Net profit after fees: <span className="text-chart-1 font-mono">${netTpUsdt.toFixed(4)}</span>
-                  {" "}(fee ≈ <span className="font-mono">${estimatedFeeUsdt.toFixed(4)}</span>)
+                  Guaranteed net profit: <span className="text-chart-1 font-mono">${netTpUsdt.toFixed(4)}</span>
+                  {" "}(est. fee ≈ <span className="font-mono">${estimatedFeeUsdt.toFixed(4)}</span>, TP price adjusted by bot)
                 </p>
               </div>
               <div>
