@@ -219,7 +219,8 @@ export async function closeMarketOrder(
   side: "Buy" | "Sell",
   qty: number,
   positionIdx?: number,
-): Promise<boolean> {
+): Promise<{ success: boolean; orderId: string | null; executionPrice: number | null }> {
+  const result = { success: false, orderId: null as string | null, executionPrice: null as number | null };
   const closeSide = side === "Buy" ? "Sell" : "Buy";
   const closeParams = {
     category: "linear" as const,
@@ -238,31 +239,96 @@ export async function closeMarketOrder(
     if (rc !== 0) {
       if (rc === 110025 || rc === 110045) {
         logger.info({ symbol, retCode: rc }, "Position already closed by exchange SL/TP");
-        return true;
+        return { success: true, orderId: null, executionPrice: null };
       }
       throw new Error(res?.retMsg ?? "Unknown WS-API error");
     }
-    logger.info({ symbol, side, closeSide, qty }, "Position closed via WS-API (/v5/private)");
-    return true;
+    const orderId = res?.result?.orderId ?? res?.result?.orderID ?? null;
+    result.success = true;
+    result.orderId = orderId;
+    if (orderId) {
+      result.executionPrice = await fetchCloseExecutionPrice(symbol, orderId);
+    }
+    logger.info({ symbol, side, closeSide, qty, orderId, executionPrice: result.executionPrice }, "Position closed via WS-API (/v5/private)");
+    return result;
   } catch (err: any) {
     logger.warn({ err: sanitizeErr(err) }, "WS-API close failed — trying REST fallback");
   }
 
   // --- Fallback: REST ---
   const auth = getAuthClient();
-  if (!auth) return false;
+  if (!auth) return result;
   try {
     const res = await auth.submitOrder(closeParams as any);
     if (res.retCode !== 0) {
       if (res.retCode === 110025 || res.retCode === 110045) {
         logger.info({ symbol, retCode: res.retCode }, "Position already closed by exchange SL/TP — skipping our close");
-        return true;
+        return { success: true, orderId: null, executionPrice: null };
       }
       throw new Error(res.retMsg);
     }
-    return true;
+    const orderId = res.result.orderId || null;
+    result.success = true;
+    result.orderId = orderId;
+    if (orderId) {
+      result.executionPrice = await fetchCloseExecutionPrice(symbol, orderId);
+    }
+    logger.info({ symbol, side, closeSide, qty, orderId, executionPrice: result.executionPrice }, "Position closed via REST");
+    return result;
   } catch (err) {
     logger.error({ err: sanitizeErr(err) }, "Failed to close market order on Bybit");
-    return false;
+    return result;
   }
+}
+
+async function fetchCloseExecutionPrice(symbol: string, orderId: string): Promise<number | null> {
+  const auth = getAuthClient();
+  if (!auth) return null;
+
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      const execRes = await auth.getExecutionList({
+        category: "linear",
+        symbol,
+        orderId,
+        limit: 50,
+      });
+      const execList = execRes.result?.list ?? [];
+      const fills = execList
+        .map((e: any) => ({
+          price: parseFloat(e.execPrice ?? "0"),
+          qty: parseFloat(e.execQty ?? "0"),
+        }))
+        .filter((f: any) => f.price > 0 && f.qty >= 0);
+
+      if (fills.length > 0) {
+        const totalQty = fills.reduce((sum: number, f: any) => sum + f.qty, 0);
+        if (totalQty > 0) {
+          return fills.reduce((sum: number, f: any) => sum + f.price * f.qty, 0) / totalQty;
+        }
+        return fills[0].price;
+      }
+    } catch (err) {
+      if (attempt === 4) {
+        logger.warn({ err: sanitizeErr(err), symbol, orderId }, "Unable to fetch execution list for close order");
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, 200));
+  }
+
+  try {
+    const histRes = await auth.getHistoricOrders({
+      category: "linear",
+      symbol,
+      orderId,
+      limit: 1,
+    } as any);
+    const first = histRes.result?.list?.[0] as any;
+    const avgPrice = parseFloat(first?.avgPrice ?? "0");
+    if (avgPrice > 0) return avgPrice;
+  } catch (err) {
+    logger.warn({ err: sanitizeErr(err), symbol, orderId }, "Unable to fetch historic order for close price fallback");
+  }
+
+  return null;
 }
