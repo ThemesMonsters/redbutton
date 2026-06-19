@@ -600,6 +600,7 @@ export async function checkPositionsTpSl() {
     const configs = await db.select().from(botConfigTable).limit(1);
     const globalConfig = configs[0];
     const slippagePct = parseFloat(String(globalConfig?.slippagePercent ?? 0.05)) / 100;
+    const takerFeeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.001));
 
     const presets = await getCachedPresets();
     const presetMap = new Map<string, any>(presets.map(p => [p.name, p]));
@@ -680,11 +681,11 @@ export async function checkPositionsTpSl() {
 
         // ─── SL/TP check ─────────────────────────────────────────────────────
         if (pos.side === "long") {
-          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl"); continue; }
-          if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp"); continue; }
+          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         } else {
-          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl"); continue; }
-          if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp"); continue; }
+          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         }
       } finally {
         processingPositionIds.delete(pos.id);
@@ -695,7 +696,7 @@ export async function checkPositionsTpSl() {
   }
 }
 
-async function closePosition(pos: any, triggerPrice: number, slippagePct: number, reason: "tp" | "sl") {
+async function closePosition(pos: any, triggerPrice: number, slippagePct: number, reason: "tp" | "sl", takerFeeRate: number = 0) {
   const updated = await db
     .update(positionsTable)
     .set({ isOpen: false, closedAt: new Date() })
@@ -707,12 +708,14 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
   }
 
   if (pos.mode === "live") {
-    const closeSide = pos.side === "long" ? "Sell" : "Buy";
-    const posIdx    = pos.side === "long" ? 1 : 2;
+    // closeMarketOrder expects the POSITION side ("Buy" for long, "Sell" for short)
+    // and internally computes the correct close-order side. Do NOT pre-flip here.
+    const positionSide = pos.side === "long" ? "Buy" : "Sell";
+    const posIdx       = pos.side === "long" ? 1 : 2;
     try {
-      const closeRes = await closeMarketOrder(pos.symbol, closeSide, parseFloat(pos.quantity), posIdx);
+      const closeRes = await closeMarketOrder(pos.symbol, positionSide, parseFloat(pos.quantity), posIdx);
       if (closeRes.executionPrice && closeRes.executionPrice > 0) {
-        const pnl = computeClosedPnl(pos, closeRes.executionPrice);
+        const pnl = computeClosedPnl(pos, closeRes.executionPrice, takerFeeRate);
         await insertClosedTrade(pos, closeRes.executionPrice, pnl.pnl, pnl.pnlPercent);
         logger.info(
           { symbol: pos.symbol, reason, exitPrice: closeRes.executionPrice, pnl: pnl.pnl.toFixed(4), pnlPercent: pnl.pnlPercent.toFixed(2) + "%", preset: pos.presetName },
@@ -734,7 +737,7 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     ? (pos.side === "long" ? triggerPrice * (1 - slippagePct) : triggerPrice * (1 + slippagePct))
     : triggerPrice;
 
-  const pnl = computeClosedPnl(pos, accountedExit);
+  const pnl = computeClosedPnl(pos, accountedExit, pos.mode === "live" ? takerFeeRate : 0);
   await insertClosedTrade(pos, accountedExit, pnl.pnl, pnl.pnlPercent);
   logger.info(
     { symbol: pos.symbol, reason, exitPrice: accountedExit, pnl: pnl.pnl.toFixed(4), pnlPercent: pnl.pnlPercent.toFixed(2) + "%", preset: pos.presetName },
@@ -742,14 +745,17 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
   );
 }
 
-function computeClosedPnl(pos: any, exitPrice: number): { pnl: number; pnlPercent: number } {
+function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0): { pnl: number; pnlPercent: number } {
   const qty = parseFloat(pos.quantity);
   const entry = parseFloat(pos.entryPrice);
   const leverage = pos.leverage ?? 1;
   const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
+  // Deduct open + close taker fees (applied on notional value of each leg)
+  const feesUsdt = takerFeeRate > 0 ? (entry * qty + exitPrice * qty) * takerFeeRate : 0;
+  const netPnl = pnl - feesUsdt;
   const margin = entry > 0 && qty > 0 ? (entry * qty) / Math.max(leverage, 1) : 0;
-  const pnlPercent = margin > 0 ? (pnl / margin) * 100 : 0;
-  return { pnl, pnlPercent };
+  const pnlPercent = margin > 0 ? (netPnl / margin) * 100 : 0;
+  return { pnl: netPnl, pnlPercent };
 }
 
 async function insertClosedTrade(pos: any, exitPrice: number, pnl: number, pnlPercent: number) {

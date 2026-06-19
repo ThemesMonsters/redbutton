@@ -35,5 +35,6 @@ export interface BotConfig {
   averagingThresholdPercent: number;
   maxAveragingCount: number;
   slippagePercent: number;
+  takerFeeRate: number;
   indicatorLookback?: number;
 }

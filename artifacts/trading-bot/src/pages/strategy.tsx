@@ -703,6 +703,35 @@ export default function Strategy() {
               </div>
             )}
 
+            {/* Taker fee rate */}
+            <div>
+              <Label className="text-[10px] text-muted-foreground mb-1.5 block">Taker fee rate</Label>
+              <div className="flex items-center gap-1.5">
+                <Input
+                  type="number"
+                  step="0.0001"
+                  min="0"
+                  max="0.01"
+                  className="h-7 w-24 text-xs font-mono"
+                  defaultValue={((config as any)?.takerFeeRate ?? 0.001).toString()}
+                  onBlur={async e => {
+                    const val = parseFloat(e.target.value);
+                    if (!isNaN(val) && val >= 0) {
+                      try {
+                        await updateConfig.mutateAsync({ data: { takerFeeRate: val } as any });
+                        qc.invalidateQueries({ queryKey: getGetBotConfigQueryKey() });
+                      } catch {
+                        toast({ title: "Error", description: "Failed to save fee rate", variant: "destructive" });
+                      }
+                    }
+                  }}
+                />
+                <span className="text-[10px] text-muted-foreground">
+                  ({(((config as any)?.takerFeeRate ?? 0.001) * 100).toFixed(3)}%)
+                </span>
+              </div>
+            </div>
+
             <p className="text-[10px] text-muted-foreground ml-auto">
               Mode applies to all presets simultaneously
             </p>

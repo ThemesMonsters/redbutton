@@ -27,6 +27,7 @@ export interface BotConfigInput {
   averagingThresholdPercent?: number;
   maxAveragingCount?: number;
   slippagePercent?: number;
+  takerFeeRate?: number;
   indicatorLookback?: number;
   volumeProfileParams?: VolumeProfileParams;
   fibonacciParams?: FibonacciParams;
