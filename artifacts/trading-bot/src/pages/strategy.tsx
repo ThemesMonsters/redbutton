@@ -154,7 +154,7 @@ function PresetCard({
           <span className="font-semibold text-sm">{preset.name}</span>
           <div className="flex items-center gap-1.5 ml-2 flex-wrap">
             <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono">${preset.positionSizeUsdt} × {preset.leverage}x</Badge>
-            <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-destructive border-destructive/30">SL ${preset.stopLossUsdt}</Badge>
+            {!preset.averagingEnabled && <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-destructive border-destructive/30">SL ${preset.stopLossUsdt}</Badge>}
             <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-chart-1 border-chart-1/30">TP ${preset.takeProfitUsdt}</Badge>
             {preset.strategies.slice(0, 3).map(s => (
               <Badge key={s} variant="outline" className="text-[9px] px-1.5 h-4 font-mono bg-accent/30">
@@ -202,10 +202,11 @@ function PresetCard({
                 />
                 <p className="text-[9px] text-muted-foreground mt-0.5">Margin per trade</p>
               </div>
+              {!form.averagingEnabled && (
               <div>
                 <Label className="text-[10px] text-muted-foreground mb-1 block">Stop Loss (USDT)</Label>
                 <Input
-                  className="h-7 text-xs font-mono border-destructive/40"
+                  className={cn("h-7 text-xs font-mono", form.stopLossUsdt <= 0 ? "border-destructive/40" : "")}
                   type="number"
                   min={0.01}
                   step={0.01}
@@ -214,6 +215,7 @@ function PresetCard({
                 />
                 <p className="text-[9px] text-muted-foreground mt-0.5">Max loss per trade</p>
               </div>
+              )}
               <div>
                 <Label className="text-[10px] text-muted-foreground mb-1 block">Take Profit (USDT)</Label>
                 <Input
