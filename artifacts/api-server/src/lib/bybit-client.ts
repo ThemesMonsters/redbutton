@@ -5,6 +5,9 @@ import { submitOrderWS } from "./bybit-ws-api";
 // api.bytick.com bypasses the Amazon CloudFront geo-restriction that blocks
 // many cloud hosting providers (AWS, Replit, etc.) from reaching api.bybit.com
 const BYBIT_BASE_URL = "https://api.bytick.com";
+const EXECUTION_LIST_LIMIT = 50;
+const MAX_EXECUTION_FETCH_RETRIES = 5;
+const EXECUTION_FETCH_RETRY_DELAY_MS = 200;
 
 let authClient: RestClientV5 | null = null;
 let publicClient: RestClientV5 | null = null;
@@ -285,13 +288,13 @@ async function fetchCloseExecutionPrice(symbol: string, orderId: string): Promis
   const auth = getAuthClient();
   if (!auth) return null;
 
-  for (let attempt = 0; attempt < 5; attempt++) {
+  for (let attempt = 0; attempt < MAX_EXECUTION_FETCH_RETRIES; attempt++) {
     try {
       const execRes = await auth.getExecutionList({
         category: "linear",
         symbol,
         orderId,
-        limit: 50,
+        limit: EXECUTION_LIST_LIMIT,
       });
       const execList = execRes.result?.list ?? [];
       const fills = execList
@@ -299,21 +302,22 @@ async function fetchCloseExecutionPrice(symbol: string, orderId: string): Promis
           price: parseFloat(e.execPrice ?? "0"),
           qty: parseFloat(e.execQty ?? "0"),
         }))
-        .filter((f: any) => f.price > 0 && f.qty >= 0);
+        .filter((f: any) => f.price > 0 && f.qty > 0);
 
       if (fills.length > 0) {
         const totalQty = fills.reduce((sum: number, f: any) => sum + f.qty, 0);
-        if (totalQty > 0) {
-          return fills.reduce((sum: number, f: any) => sum + f.price * f.qty, 0) / totalQty;
-        }
-        return fills[0].price;
+        if (!Number.isFinite(totalQty) || totalQty <= 0) return null;
+        const weightedPriceSum = fills.reduce((sum: number, f: any) => sum + f.price * f.qty, 0);
+        return weightedPriceSum / totalQty;
       }
     } catch (err) {
-      if (attempt === 4) {
+      if (attempt === MAX_EXECUTION_FETCH_RETRIES - 1) {
         logger.warn({ err: sanitizeErr(err), symbol, orderId }, "Unable to fetch execution list for close order");
       }
     }
-    await new Promise(resolve => setTimeout(resolve, 200));
+    if (attempt < MAX_EXECUTION_FETCH_RETRIES - 1) {
+      await new Promise(resolve => setTimeout(resolve, EXECUTION_FETCH_RETRY_DELAY_MS));
+    }
   }
 
   try {

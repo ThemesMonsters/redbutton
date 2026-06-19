@@ -726,10 +726,11 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     }
   }
 
-  // Paper mode (and live fallback) keeps TP accounting at trigger price so tiny TPs
-  // do not flip to losses due to synthetic slippage.
-  const applyAdverseSlippage = reason === "sl" && pos.mode !== "live";
-  const accountedExit = applyAdverseSlippage
+  // Synthetic slippage is only applied for paper SL exits. For TP exits (and for
+  // live fallback when exchange fill price is unavailable), we keep trigger-price
+  // accounting so tiny TP configurations are not flipped into losses by synthetic math.
+  const shouldApplyPaperSlippage = reason === "sl" && pos.mode === "paper";
+  const accountedExit = shouldApplyPaperSlippage
     ? (pos.side === "long" ? triggerPrice * (1 - slippagePct) : triggerPrice * (1 + slippagePct))
     : triggerPrice;
 
