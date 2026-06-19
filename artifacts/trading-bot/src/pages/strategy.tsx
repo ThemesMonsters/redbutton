@@ -37,6 +37,7 @@ const TIMEFRAME_OPTIONS = [
 ];
 
 const LEVERAGE_OPTIONS = [1, 2, 3, 5, 10, 15, 20, 25, 50, 100];
+const DEFAULT_TAKER_FEE_RATE = 0.001;
 
 type Preset = {
   id: number;
@@ -713,12 +714,12 @@ export default function Strategy() {
                   min="0"
                   max="0.01"
                   className="h-7 w-24 text-xs font-mono"
-                  defaultValue={((config as any)?.takerFeeRate ?? 0.001).toString()}
+                  defaultValue={(config?.takerFeeRate ?? DEFAULT_TAKER_FEE_RATE).toString()}
                   onBlur={async e => {
                     const val = parseFloat(e.target.value);
                     if (!isNaN(val) && val >= 0) {
                       try {
-                        await updateConfig.mutateAsync({ data: { takerFeeRate: val } as any });
+                        await updateConfig.mutateAsync({ data: { takerFeeRate: val } });
                         qc.invalidateQueries({ queryKey: getGetBotConfigQueryKey() });
                       } catch {
                         toast({ title: "Error", description: "Failed to save fee rate", variant: "destructive" });
@@ -727,7 +728,7 @@ export default function Strategy() {
                   }}
                 />
                 <span className="text-[10px] text-muted-foreground">
-                  ({(((config as any)?.takerFeeRate ?? 0.001) * 100).toFixed(3)}%)
+                  ({((config?.takerFeeRate ?? DEFAULT_TAKER_FEE_RATE) * 100).toFixed(3)}%)
                 </span>
               </div>
             </div>

@@ -708,8 +708,10 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
   }
 
   if (pos.mode === "live") {
-    // closeMarketOrder expects the POSITION side ("Buy" for long, "Sell" for short)
-    // and internally computes the correct close-order side. Do NOT pre-flip here.
+    // closeMarketOrder's `side` parameter is the POSITION-opening side (the same side
+    // used when the position was placed: "Buy" for a long, "Sell" for a short).
+    // The function internally derives the close-order direction by inverting that value.
+    // Passing the already-inverted order side here would double-flip the direction.
     const positionSide = pos.side === "long" ? "Buy" : "Sell";
     const posIdx       = pos.side === "long" ? 1 : 2;
     try {
@@ -750,7 +752,8 @@ function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0)
   const entry = parseFloat(pos.entryPrice);
   const leverage = pos.leverage ?? 1;
   const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
-  // Deduct open + close taker fees (applied on notional value of each leg)
+  // Deduct taker fees for both legs: fee = notional × rate, where notional = price × qty.
+  // Total fees = (entry_notional + exit_notional) × takerFeeRate.
   const feesUsdt = takerFeeRate > 0 ? (entry * qty + exitPrice * qty) * takerFeeRate : 0;
   const netPnl = pnl - feesUsdt;
   const margin = entry > 0 && qty > 0 ? (entry * qty) / Math.max(leverage, 1) : 0;
