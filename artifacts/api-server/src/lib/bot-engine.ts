@@ -1,8 +1,9 @@
 import { db } from "@workspace/db";
 import { botConfigTable, positionsTable, tradesTable, signalsTable, strategyPresetsTable } from "@workspace/db";
+import type { BotConfigRow } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "./logger";
-import { hasApiKeys, setPositionTpSl, setApiKeys, placeMarketOrder, closeMarketOrder } from "./bybit-client";
+import { hasApiKeys, setPositionTpSl, setApiKeys, placeMarketOrder, closeMarketOrder, getClosedPnlSnapshot } from "./bybit-client";
 import { initMarketFeed, getCurrentPrice, getKlinesFromCache, updateSubscriptions, getLiquidationClusters } from "./market-feed";
 import { initPrivateFeed, getPrivateBalance } from "./private-feed";
 import { setRelayKeys, queueFetchPositions } from "./live-order-relay";
@@ -48,11 +49,13 @@ function snapQty(
   return null;
 }
 
-function getEffectiveBalance(mode: "live" | "paper", globalConfig: any): number {
+function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow | undefined): number {
   if (mode === "live") {
     const wb = getPrivateBalance();
     const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
-    return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+    if ((wb?.equity ?? 0) > 0) return wb!.equity;
+    if (li > 0) return li;
+    return parseFloat(String(globalConfig?.paperBalance)) || 10000;
   }
   return parseFloat(String(globalConfig?.paperBalance)) || 10000;
 }
@@ -783,6 +786,31 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     const posIdx       = pos.side === "long" ? 1 : 2;
     try {
       const closeRes = await closeMarketOrder(pos.symbol, positionSide, parseFloat(pos.quantity), posIdx);
+      const exchangeSnapshot = await getClosedPnlSnapshot(pos.symbol, {
+        orderId: closeRes.orderId,
+        openedAt: pos.openedAt,
+        expectedQty: parseFloat(pos.quantity),
+      });
+      if (exchangeSnapshot) {
+        const settledPos = {
+          ...pos,
+          entryPrice: String(exchangeSnapshot.entryPrice),
+          quantity: String(exchangeSnapshot.closedQty),
+          leverage: exchangeSnapshot.leverage ?? pos.leverage,
+        };
+        const pnlPercent = computePnlPercent(
+          exchangeSnapshot.closedPnl,
+          exchangeSnapshot.entryPrice,
+          exchangeSnapshot.closedQty,
+          settledPos.leverage,
+        );
+        await insertClosedTrade(settledPos, exchangeSnapshot.exitPrice, exchangeSnapshot.closedPnl, pnlPercent);
+        logger.info(
+          { symbol: pos.symbol, reason, exitPrice: exchangeSnapshot.exitPrice, pnl: exchangeSnapshot.closedPnl.toFixed(4), pnlPercent: pnlPercent.toFixed(2) + "%", preset: pos.presetName },
+          "Position closed by SL/TP using Bybit closed PnL snapshot",
+        );
+        return;
+      }
       if (closeRes.executionPrice && closeRes.executionPrice > 0) {
         const pnl = computeClosedPnl(pos, closeRes.executionPrice, takerFeeRate);
         await insertClosedTrade(pos, closeRes.executionPrice, pnl.pnl, pnl.pnlPercent);
@@ -817,15 +845,19 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
 function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0): { pnl: number; pnlPercent: number } {
   const qty = parseFloat(pos.quantity);
   const entry = parseFloat(pos.entryPrice);
-  const leverage = pos.leverage ?? 1;
   const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
   // Deduct taker fees for both legs: fee = notional × rate, where notional = price × qty.
   // Total fees = (entry_notional + exit_notional) × takerFeeRate.
   const feesUsdt = takerFeeRate > 0 ? (entry * qty + exitPrice * qty) * takerFeeRate : 0;
   const netPnl = pnl - feesUsdt;
-  const margin = entry > 0 && qty > 0 ? (entry * qty) / Math.max(leverage, 1) : 0;
-  const pnlPercent = margin > 0 ? (netPnl / margin) * 100 : 0;
+  const pnlPercent = computePnlPercent(netPnl, entry, qty, pos.leverage);
   return { pnl: netPnl, pnlPercent };
+}
+
+function computePnlPercent(pnl: number, entryPrice: number, qty: number, leverage: number | null | undefined): number {
+  const effectiveLeverage = leverage ?? 1;
+  const margin = entryPrice > 0 && qty > 0 ? (entryPrice * qty) / Math.max(effectiveLeverage, 1) : 0;
+  return margin > 0 ? (pnl / margin) * 100 : 0;
 }
 
 async function insertClosedTrade(pos: any, exitPrice: number, pnl: number, pnlPercent: number) {
