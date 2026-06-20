@@ -48,6 +48,15 @@ function snapQty(
   return null;
 }
 
+function getEffectiveBalance(mode: "live" | "paper", globalConfig: any): number {
+  if (mode === "live") {
+    const wb = getPrivateBalance();
+    const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
+    return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+  }
+  return parseFloat(String(globalConfig?.paperBalance)) || 10000;
+}
+
 /**
  * Compute the price move needed so that, after paying both entry and exit taker
  * fees, the net PnL equals `targetUsdt`.
@@ -496,13 +505,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const notional = marginUsdt * leverage;
   const rawQty = notional / currentPrice;
 
-  const effectiveBalance = mode === "live"
-    ? (() => {
-        const wb = getPrivateBalance();
-        const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
-        return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
-      })()
-    : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+  const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
   const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice, marginUsdt);
   if (qty === null) {
@@ -690,13 +693,7 @@ export async function checkPositionsTpSl() {
 
             // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
-            const averagingBalance = pos.mode === "live"
-              ? (() => {
-                  const wb = getPrivateBalance();
-                  const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
-                  return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
-                })()
-              : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+            const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
             const addQty = snapQty(
               pos.symbol,
               avgNotional / currentPrice,
