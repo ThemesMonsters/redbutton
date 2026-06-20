@@ -30,12 +30,20 @@ const QTY_RULES: Record<string, { min: number; step: number; decimals: number }>
 };
 const DEFAULT_QTY_RULE = { min: 0.01, step: 0.01, decimals: 2 };
 
-function snapQty(symbol: string, rawQty: number, effectiveBalance: number, leverage: number, currentPrice: number): number | null {
+function snapQty(
+  symbol: string,
+  rawQty: number,
+  effectiveBalance: number,
+  leverage: number,
+  currentPrice: number,
+  maxMarginUsdt?: number,
+): number | null {
   const rule = QTY_RULES[symbol] ?? DEFAULT_QTY_RULE;
   const snapped = Math.floor(rawQty / rule.step) * rule.step;
   const rounded = parseFloat(snapped.toFixed(rule.decimals));
   if (rounded >= rule.min) return rounded;
   const minMarginRequired = (rule.min * currentPrice) / leverage;
+  if (maxMarginUsdt != null && minMarginRequired > maxMarginUsdt) return null;
   if (minMarginRequired <= effectiveBalance) return rule.min;
   return null;
 }
@@ -496,7 +504,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
       })()
     : parseFloat(String(globalConfig?.paperBalance)) || 10000;
 
-  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice);
+  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice, marginUsdt);
   if (qty === null) {
     logger.warn({ symbol, rawQty, marginUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
     return;
@@ -682,7 +690,28 @@ export async function checkPositionsTpSl() {
 
             // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
-            const addQty = Math.max(qty, snapQty(pos.symbol, avgNotional / currentPrice, 99999, leverage, currentPrice) ?? qty);
+            const averagingBalance = pos.mode === "live"
+              ? (() => {
+                  const wb = getPrivateBalance();
+                  const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
+                  return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+                })()
+              : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+            const addQty = snapQty(
+              pos.symbol,
+              avgNotional / currentPrice,
+              averagingBalance,
+              leverage,
+              currentPrice,
+              averagingAmountUsdt,
+            );
+            if (addQty === null) {
+              logger.warn(
+                { symbol: pos.symbol, averagingAmountUsdt, leverage, currentPrice, preset: pos.presetName },
+                "Averaging skipped: minimum exchange quantity exceeds configured averaging budget or available balance",
+              );
+              continue;
+            }
 
             const newQty   = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
