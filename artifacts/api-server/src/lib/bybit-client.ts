@@ -8,6 +8,9 @@ const BYBIT_BASE_URL = "https://api.bytick.com";
 const EXECUTION_LIST_LIMIT = 50;
 const MAX_EXECUTION_FETCH_RETRIES = 5;
 const EXECUTION_FETCH_RETRY_DELAY_MS = 200;
+const CLOSED_PNL_TIMESTAMP_BUFFER_MS = 60_000;
+const MIN_QTY_TOLERANCE = 1e-8;
+const QTY_TOLERANCE_FACTOR = 1e-6;
 
 let authClient: RestClientV5 | null = null;
 let publicClient: RestClientV5 | null = null;
@@ -303,7 +306,7 @@ export async function getClosedPnlSnapshot(
 
   const openedAtMs = options.openedAt ? new Date(options.openedAt).getTime() : null;
   const expectedQty = options.expectedQty && Number.isFinite(options.expectedQty) ? options.expectedQty : null;
-  const qtyTolerance = expectedQty ? Math.max(1e-8, expectedQty * 1e-6) : null;
+  const qtyTolerance = expectedQty ? Math.max(MIN_QTY_TOLERANCE, expectedQty * QTY_TOLERANCE_FACTOR) : null;
 
   for (let attempt = 0; attempt < MAX_EXECUTION_FETCH_RETRIES; attempt++) {
     try {
@@ -333,7 +336,7 @@ export async function getClosedPnlSnapshot(
           .filter((item: ClosedPnlSnapshot) => {
             // Bybit may publish the closed-pnl record slightly before/after the
             // exact local openedAt timestamp we stored, so allow a small buffer.
-            if (openedAtMs && item.updatedTime < openedAtMs - 60_000) return false;
+            if (openedAtMs && item.updatedTime < openedAtMs - CLOSED_PNL_TIMESTAMP_BUFFER_MS) return false;
             if (qtyTolerance != null && expectedQty != null && Math.abs(item.closedQty - expectedQty) > qtyTolerance) return false;
             return true;
           })
