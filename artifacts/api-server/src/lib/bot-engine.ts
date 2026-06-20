@@ -772,11 +772,16 @@ export async function checkPositionsTpSl() {
         }
 
         // ─── SL/TP check ─────────────────────────────────────────────────────
+        // SL is only allowed when averaging is not enabled AND the position
+        // has never been averaged. Once averaging has fired at least once
+        // (averageCount > 0) the risks are elevated and the position should
+        // only be exited via take-profit or exchange liquidation.
+        const slAllowed = !averagingEnabled && (pos.averageCount ?? 0) === 0;
         if (pos.side === "long") {
-          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
           if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         } else {
-          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (sl && currentPrice >= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
           if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         }
       } finally {
