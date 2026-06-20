@@ -469,7 +469,7 @@ export default function Dashboard() {
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className="text-xs font-semibold">{p.name}</span>
                           <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono">${p.positionSizeUsdt} × {p.leverage}x</Badge>
-                          <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-destructive border-destructive/30">SL ${p.stopLossUsdt}</Badge>
+                          {!p.averagingEnabled && <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-destructive border-destructive/30">SL ${p.stopLossUsdt}</Badge>}
                           <Badge variant="outline" className="text-[9px] px-1.5 h-4 font-mono text-chart-1 border-chart-1/30">TP ${p.takeProfitUsdt}</Badge>
                         </div>
                         <div className="flex items-center gap-2 mt-1 text-[9px] text-muted-foreground font-mono">
