@@ -541,6 +541,20 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     const side = dominant === "long" ? "Buy" : "Sell";
     const posIdx = dominant === "long" ? 1 : 2;
     try {
+
+      logger.error({
+        symbol,
+        side,
+        currentPrice,
+        qty,
+        slPriceMove,
+        tpPriceMove,
+        sl,
+        tp,
+        stopLossUsdt,
+        takeProfitUsdt,
+      }, "DEBUG ORDER VALUES");
+
       bybitOrderId = await placeMarketOrder(
         symbol, side, qty, leverage,
         preset.averagingEnabled ? undefined : sl,
