@@ -8,6 +8,9 @@ const BYBIT_BASE_URL = "https://api.bytick.com";
 const EXECUTION_LIST_LIMIT = 50;
 const MAX_EXECUTION_FETCH_RETRIES = 5;
 const EXECUTION_FETCH_RETRY_DELAY_MS = 200;
+const CLOSED_PNL_TIMESTAMP_BUFFER_MS = 60_000;
+const MIN_QTY_TOLERANCE = 1e-8;
+const QTY_TOLERANCE_FACTOR = 1e-6;
 
 let authClient: RestClientV5 | null = null;
 let publicClient: RestClientV5 | null = null;
@@ -282,6 +285,77 @@ export async function closeMarketOrder(
     logger.error({ err: sanitizeErr(err) }, "Failed to close market order on Bybit");
     return result;
   }
+}
+
+type ClosedPnlSnapshot = {
+  orderId: string;
+  entryPrice: number;
+  exitPrice: number;
+  closedPnl: number;
+  closedQty: number;
+  leverage: number | null;
+  updatedTime: number;
+};
+
+export async function getClosedPnlSnapshot(
+  symbol: string,
+  options: { orderId?: string | null; openedAt?: Date | string; expectedQty?: number } = {},
+): Promise<ClosedPnlSnapshot | null> {
+  const auth = getAuthClient();
+  if (!auth) return null;
+
+  const openedAtMs = options.openedAt ? new Date(options.openedAt).getTime() : null;
+  const expectedQty = options.expectedQty && Number.isFinite(options.expectedQty) ? options.expectedQty : null;
+  const qtyTolerance = expectedQty ? Math.max(MIN_QTY_TOLERANCE, expectedQty * QTY_TOLERANCE_FACTOR) : null;
+
+  for (let attempt = 0; attempt < MAX_EXECUTION_FETCH_RETRIES; attempt++) {
+    try {
+      const res = await auth.getClosedPnL({
+        category: "linear",
+        symbol,
+        limit: EXECUTION_LIST_LIMIT,
+      });
+      const records = (res.result?.list ?? []).map((item: any) => ({
+        orderId: String(item.orderId ?? ""),
+        entryPrice: parseFloat(item.avgEntryPrice ?? "0"),
+        exitPrice: parseFloat(item.avgExitPrice ?? "0"),
+        closedPnl: parseFloat(item.closedPnl ?? "0"),
+        closedQty: parseFloat(item.closedSize ?? item.qty ?? "0"),
+        leverage: item.leverage != null ? parseFloat(item.leverage) : null,
+        updatedTime: parseInt(item.updatedTime ?? item.createdTime ?? "0", 10),
+      })).filter((item: ClosedPnlSnapshot) =>
+        item.orderId &&
+        item.entryPrice > 0 &&
+        item.exitPrice > 0 &&
+        item.closedQty > 0 &&
+        Number.isFinite(item.closedPnl),
+      );
+
+      const matched = records.find((item: ClosedPnlSnapshot) => item.orderId === options.orderId)
+        ?? records
+          .filter((item: ClosedPnlSnapshot) => {
+            // Bybit may publish the closed-pnl record slightly before/after the
+            // exact local openedAt timestamp we stored, so allow a small buffer.
+            if (openedAtMs && item.updatedTime < openedAtMs - CLOSED_PNL_TIMESTAMP_BUFFER_MS) return false;
+            if (openedAtMs && item.updatedTime > Date.now() + CLOSED_PNL_TIMESTAMP_BUFFER_MS) return false;
+            if (qtyTolerance != null && expectedQty != null && Math.abs(item.closedQty - expectedQty) > qtyTolerance) return false;
+            return true;
+          })
+          .sort((a: ClosedPnlSnapshot, b: ClosedPnlSnapshot) => b.updatedTime - a.updatedTime)[0];
+
+      if (matched) return matched;
+    } catch (err) {
+      if (attempt === MAX_EXECUTION_FETCH_RETRIES - 1) {
+        logger.warn({ err: sanitizeErr(err), symbol, orderId: options.orderId }, "Unable to fetch closed PnL snapshot");
+      }
+    }
+
+    if (attempt < MAX_EXECUTION_FETCH_RETRIES - 1) {
+      await new Promise(resolve => setTimeout(resolve, EXECUTION_FETCH_RETRY_DELAY_MS));
+    }
+  }
+
+  return null;
 }
 
 async function fetchCloseExecutionPrice(symbol: string, orderId: string): Promise<number | null> {

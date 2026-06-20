@@ -1,8 +1,9 @@
 import { db } from "@workspace/db";
 import { botConfigTable, positionsTable, tradesTable, signalsTable, strategyPresetsTable } from "@workspace/db";
+import type { BotConfigRow } from "@workspace/db";
 import { eq, and } from "drizzle-orm";
 import { logger } from "./logger";
-import { hasApiKeys, setPositionTpSl, setApiKeys, placeMarketOrder, closeMarketOrder } from "./bybit-client";
+import { hasApiKeys, setPositionTpSl, setApiKeys, placeMarketOrder, closeMarketOrder, getClosedPnlSnapshot } from "./bybit-client";
 import { initMarketFeed, getCurrentPrice, getKlinesFromCache, updateSubscriptions, getLiquidationClusters } from "./market-feed";
 import { initPrivateFeed, getPrivateBalance } from "./private-feed";
 import { setRelayKeys, queueFetchPositions } from "./live-order-relay";
@@ -30,14 +31,53 @@ const QTY_RULES: Record<string, { min: number; step: number; decimals: number }>
 };
 const DEFAULT_QTY_RULE = { min: 0.01, step: 0.01, decimals: 2 };
 
-function snapQty(symbol: string, rawQty: number, effectiveBalance: number, leverage: number, currentPrice: number): number | null {
+function getMinMarginRequired(symbol: string, currentPrice: number, leverage: number): number {
+  const rule = QTY_RULES[symbol] ?? DEFAULT_QTY_RULE;
+  return (rule.min * currentPrice) / leverage;
+}
+
+function snapQty(
+  symbol: string,
+  rawQty: number,
+  effectiveBalance: number,
+  leverage: number,
+  currentPrice: number,
+  maxMarginUsdt?: number,
+): number | null {
   const rule = QTY_RULES[symbol] ?? DEFAULT_QTY_RULE;
   const snapped = Math.floor(rawQty / rule.step) * rule.step;
   const rounded = parseFloat(snapped.toFixed(rule.decimals));
   if (rounded >= rule.min) return rounded;
-  const minMarginRequired = (rule.min * currentPrice) / leverage;
+  const minMarginRequired = getMinMarginRequired(symbol, currentPrice, leverage);
+  if (maxMarginUsdt != null && minMarginRequired > maxMarginUsdt) return null;
   if (minMarginRequired <= effectiveBalance) return rule.min;
   return null;
+}
+
+function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow | undefined): number {
+  if (mode === "live") {
+    const wb = getPrivateBalance();
+    const equity = wb?.equity ?? 0;
+    const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
+    if (equity > 0) return equity;
+    if (li > 0) return li;
+    return parseFloat(String(globalConfig?.paperBalance)) || 10000;
+  }
+  return parseFloat(String(globalConfig?.paperBalance)) || 10000;
+}
+
+function getAveragingSkipReason(
+  minMarginRequiredUsdt: number,
+  averagingAmountUsdt: number,
+  averagingBalance: number,
+): string {
+  if (minMarginRequiredUsdt > averagingAmountUsdt) {
+    return `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
+  }
+  if (minMarginRequiredUsdt > averagingBalance) {
+    return `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
+  }
+  return "quantity could not be rounded to a valid exchange size";
 }
 
 /**
@@ -488,15 +528,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const notional = marginUsdt * leverage;
   const rawQty = notional / currentPrice;
 
-  const effectiveBalance = mode === "live"
-    ? (() => {
-        const wb = getPrivateBalance();
-        const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
-        return (wb?.equity ?? 0) > 0 ? wb!.equity : li > 0 ? li : parseFloat(String(globalConfig?.paperBalance)) || 10000;
-      })()
-    : parseFloat(String(globalConfig?.paperBalance)) || 10000;
+  const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
-  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice);
+  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice, marginUsdt);
   if (qty === null) {
     logger.warn({ symbol, rawQty, marginUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
     return;
@@ -682,7 +716,24 @@ export async function checkPositionsTpSl() {
 
             // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
-            const addQty = Math.max(qty, snapQty(pos.symbol, avgNotional / currentPrice, 99999, leverage, currentPrice) ?? qty);
+            const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
+            const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
+            const addQty = snapQty(
+              pos.symbol,
+              avgNotional / currentPrice,
+              averagingBalance,
+              leverage,
+              currentPrice,
+              averagingAmountUsdt,
+            );
+            if (addQty === null) {
+              const skipReason = getAveragingSkipReason(minMarginRequiredUsdt, averagingAmountUsdt, averagingBalance);
+              logger.warn(
+                { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minMarginRequiredUsdt, leverage, currentPrice, preset: pos.presetName, skipReason },
+                "Averaging skipped",
+              );
+              continue;
+            }
 
             const newQty   = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
@@ -721,11 +772,16 @@ export async function checkPositionsTpSl() {
         }
 
         // ─── SL/TP check ─────────────────────────────────────────────────────
+        // SL is only allowed when averaging is not enabled AND the position
+        // has never been averaged. Once averaging has fired at least once
+        // (averageCount > 0) the risks are elevated and the position should
+        // only be exited via take-profit or exchange liquidation.
+        const slAllowed = !averagingEnabled && (pos.averageCount ?? 0) === 0;
         if (pos.side === "long") {
-          if (sl && currentPrice <= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
           if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         } else {
-          if (sl && currentPrice >= sl && !averagingEnabled) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+          if (sl && currentPrice >= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
           if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
         }
       } finally {
@@ -757,6 +813,31 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     const posIdx       = pos.side === "long" ? 1 : 2;
     try {
       const closeRes = await closeMarketOrder(pos.symbol, positionSide, parseFloat(pos.quantity), posIdx);
+      const exchangeSnapshot = await getClosedPnlSnapshot(pos.symbol, {
+        orderId: closeRes.orderId,
+        openedAt: pos.openedAt,
+        expectedQty: parseFloat(pos.quantity),
+      });
+      if (exchangeSnapshot) {
+        const settledPos = {
+          ...pos,
+          entryPrice: String(exchangeSnapshot.entryPrice),
+          quantity: String(exchangeSnapshot.closedQty),
+          leverage: exchangeSnapshot.leverage ?? pos.leverage,
+        };
+        const pnlPercent = computePnlPercent(
+          exchangeSnapshot.closedPnl,
+          exchangeSnapshot.entryPrice,
+          exchangeSnapshot.closedQty,
+          settledPos.leverage,
+        );
+        await insertClosedTrade(settledPos, exchangeSnapshot.exitPrice, exchangeSnapshot.closedPnl, pnlPercent);
+        logger.info(
+          { symbol: pos.symbol, reason, exitPrice: exchangeSnapshot.exitPrice, pnl: exchangeSnapshot.closedPnl.toFixed(4), pnlPercent: pnlPercent.toFixed(2) + "%", preset: pos.presetName },
+          "Position closed by SL/TP using Bybit closed PnL snapshot",
+        );
+        return;
+      }
       if (closeRes.executionPrice && closeRes.executionPrice > 0) {
         const pnl = computeClosedPnl(pos, closeRes.executionPrice, takerFeeRate);
         await insertClosedTrade(pos, closeRes.executionPrice, pnl.pnl, pnl.pnlPercent);
@@ -791,15 +872,24 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
 function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0): { pnl: number; pnlPercent: number } {
   const qty = parseFloat(pos.quantity);
   const entry = parseFloat(pos.entryPrice);
-  const leverage = pos.leverage ?? 1;
   const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
   // Deduct taker fees for both legs: fee = notional × rate, where notional = price × qty.
   // Total fees = (entry_notional + exit_notional) × takerFeeRate.
   const feesUsdt = takerFeeRate > 0 ? (entry * qty + exitPrice * qty) * takerFeeRate : 0;
   const netPnl = pnl - feesUsdt;
-  const margin = entry > 0 && qty > 0 ? (entry * qty) / Math.max(leverage, 1) : 0;
-  const pnlPercent = margin > 0 ? (netPnl / margin) * 100 : 0;
+  const pnlPercent = computePnlPercent(netPnl, entry, qty, pos.leverage);
   return { pnl: netPnl, pnlPercent };
+}
+
+/**
+ * Convert realized PnL in USDT into return-on-margin percent.
+ * Margin is approximated as entryPrice × qty ÷ leverage, so higher leverage
+ * produces a larger percent move for the same absolute PnL.
+ */
+function computePnlPercent(pnl: number, entryPrice: number, qty: number, leverage: number | null | undefined): number {
+  const effectiveLeverage = leverage ?? 1;
+  const margin = entryPrice > 0 && qty > 0 ? (entryPrice * qty) / Math.max(effectiveLeverage, 1) : 0;
+  return margin > 0 ? (pnl / margin) * 100 : 0;
 }
 
 async function insertClosedTrade(pos: any, exitPrice: number, pnl: number, pnlPercent: number) {
