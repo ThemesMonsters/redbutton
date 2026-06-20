@@ -331,6 +331,8 @@ export async function getClosedPnlSnapshot(
       const matched = records.find((item: ClosedPnlSnapshot) => item.orderId === options.orderId)
         ?? records
           .filter((item: ClosedPnlSnapshot) => {
+            // Bybit may publish the closed-pnl record slightly before/after the
+            // exact local openedAt timestamp we stored, so allow a small buffer.
             if (openedAtMs && item.updatedTime < openedAtMs - 60_000) return false;
             if (qtyTolerance != null && expectedQty != null && Math.abs(item.closedQty - expectedQty) > qtyTolerance) return false;
             return true;

@@ -31,6 +31,11 @@ const QTY_RULES: Record<string, { min: number; step: number; decimals: number }>
 };
 const DEFAULT_QTY_RULE = { min: 0.01, step: 0.01, decimals: 2 };
 
+function getMinMarginRequired(symbol: string, currentPrice: number, leverage: number): number {
+  const rule = QTY_RULES[symbol] ?? DEFAULT_QTY_RULE;
+  return (rule.min * currentPrice) / leverage;
+}
+
 function snapQty(
   symbol: string,
   rawQty: number,
@@ -43,7 +48,7 @@ function snapQty(
   const snapped = Math.floor(rawQty / rule.step) * rule.step;
   const rounded = parseFloat(snapped.toFixed(rule.decimals));
   if (rounded >= rule.min) return rounded;
-  const minMarginRequired = (rule.min * currentPrice) / leverage;
+  const minMarginRequired = getMinMarginRequired(symbol, currentPrice, leverage);
   if (maxMarginUsdt != null && minMarginRequired > maxMarginUsdt) return null;
   if (minMarginRequired <= effectiveBalance) return rule.min;
   return null;
@@ -52,8 +57,9 @@ function snapQty(
 function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow | undefined): number {
   if (mode === "live") {
     const wb = getPrivateBalance();
+    const equity = wb?.equity ?? 0;
     const li = parseFloat(String(globalConfig?.liveInitialBalance ?? "0"));
-    if ((wb?.equity ?? 0) > 0) return wb!.equity;
+    if (equity > 0) return equity;
     if (li > 0) return li;
     return parseFloat(String(globalConfig?.paperBalance)) || 10000;
   }
@@ -697,6 +703,7 @@ export async function checkPositionsTpSl() {
             // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
+            const minAveragingMargin = getMinMarginRequired(pos.symbol, currentPrice, leverage);
             const addQty = snapQty(
               pos.symbol,
               avgNotional / currentPrice,
@@ -706,9 +713,14 @@ export async function checkPositionsTpSl() {
               averagingAmountUsdt,
             );
             if (addQty === null) {
+              const skipReason = minAveragingMargin > averagingAmountUsdt
+                ? "minimum exchange quantity exceeds configured averaging budget"
+                : minAveragingMargin > averagingBalance
+                  ? "insufficient balance for minimum exchange quantity"
+                  : "quantity could not be rounded to a valid exchange size";
               logger.warn(
-                { symbol: pos.symbol, averagingAmountUsdt, leverage, currentPrice, preset: pos.presetName },
-                "Averaging skipped: minimum exchange quantity exceeds configured averaging budget or available balance",
+                { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minAveragingMargin, leverage, currentPrice, preset: pos.presetName, skipReason },
+                "Averaging skipped",
               );
               continue;
             }
