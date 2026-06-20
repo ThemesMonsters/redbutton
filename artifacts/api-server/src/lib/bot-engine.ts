@@ -703,7 +703,7 @@ export async function checkPositionsTpSl() {
             // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
-            const minAveragingMargin = getMinMarginRequired(pos.symbol, currentPrice, leverage);
+            const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
             const addQty = snapQty(
               pos.symbol,
               avgNotional / currentPrice,
@@ -714,13 +714,13 @@ export async function checkPositionsTpSl() {
             );
             if (addQty === null) {
               let skipReason = "quantity could not be rounded to a valid exchange size";
-              if (minAveragingMargin > averagingAmountUsdt) {
-                skipReason = `minimum exchange quantity (${minAveragingMargin.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
-              } else if (minAveragingMargin > averagingBalance) {
-                skipReason = `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum exchange quantity (${minAveragingMargin.toFixed(4)} USDT)`;
+              if (minMarginRequiredUsdt > averagingAmountUsdt) {
+                skipReason = `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
+              } else if (minMarginRequiredUsdt > averagingBalance) {
+                skipReason = `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
               }
               logger.warn(
-                { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minAveragingMargin, leverage, currentPrice, preset: pos.presetName, skipReason },
+                { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minMarginRequiredUsdt, leverage, currentPrice, preset: pos.presetName, skipReason },
                 "Averaging skipped",
               );
               continue;
