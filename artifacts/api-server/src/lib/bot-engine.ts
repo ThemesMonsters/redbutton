@@ -63,21 +63,21 @@ function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow 
     if (li > 0) return li;
     return parseFloat(String(globalConfig?.paperBalance)) || 10000;
   }
-
-  function getAveragingSkipReason(
-    minMarginRequiredUsdt: number,
-    averagingAmountUsdt: number,
-    averagingBalance: number,
-  ): string {
-    if (minMarginRequiredUsdt > averagingAmountUsdt) {
-      return `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
-    }
-    if (minMarginRequiredUsdt > averagingBalance) {
-      return `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
-    }
-    return "quantity could not be rounded to a valid exchange size";
-  }
   return parseFloat(String(globalConfig?.paperBalance)) || 10000;
+}
+
+function getAveragingSkipReason(
+  minMarginRequiredUsdt: number,
+  averagingAmountUsdt: number,
+  averagingBalance: number,
+): string {
+  if (minMarginRequiredUsdt > averagingAmountUsdt) {
+    return `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
+  }
+  if (minMarginRequiredUsdt > averagingBalance) {
+    return `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
+  }
+  return "quantity could not be rounded to a valid exchange size";
 }
 
 /**
