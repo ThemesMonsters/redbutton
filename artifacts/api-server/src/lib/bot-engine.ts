@@ -317,9 +317,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   // ─── Fibonacci (single level entry, configurable) ─────────────────────────
   if (strategies.includes("fibonacci")) {
     const fp = (preset.fibonacciParams as any) || {};
-    const entryLevel = fp.entryLevel ?? 0.618;  // which retracement level to enter at
-    const slLevel    = fp.slLevel    ?? 0.786;  // which level to place SL at
-    const tolerance  = 0.005;                    // ±0.5% around the level
+    const entryLevel = fp.entryLevel ?? 0.618;
+    const slLevel    = fp.slLevel    ?? 0.786;
+    const tolerance  = 0.005;
 
     const klines1h = getKlinesFromCache(symbol, "60", 220);
     if (klines1h.length >= 55) {
@@ -344,15 +344,12 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
 
         if (rise >= 0.05 && candlesInRise <= 20 && volumeOk) {
           const range = swingHigh - swingLow;
-          // Entry at the configured retracement level (e.g. 0.618)
           const entryPrice = swingHigh - range * entryLevel;
-          // SL at the configured SL level (e.g. 0.786)
           const stopPrice  = swingHigh - range * slLevel;
+          void stopPrice;
 
-          // Price within ±tolerance of the entry level
           const atLevel = Math.abs(currentPrice - entryPrice) / entryPrice < tolerance;
 
-          // Confirmation: last completed candle closed above the entry level
           const lastC = completed[completed.length - 1];
           const prevC = completed[completed.length - 2];
           const confirmed = lastC.close >= entryPrice * (1 - tolerance * 0.5) &&
@@ -371,7 +368,6 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     }
   }
 
-  // ─── Order Blocks (always 1H data) ───────────────────────────────────────
   if (strategies.includes("order_blocks")) {
     const op = (preset.orderBlockParams as any) || {};
     const lookback = Math.min(op.lookbackBars || 50, 200);
@@ -389,11 +385,10 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     }
   }
 
-  // ─── RSI with 1H volume confirmation ─────────────────────────────────────
   if (strategies.includes("rsi")) {
     const rp = (preset.rsiParams as any) || {};
-    const period    = rp.period        || 14;
-    const oversold  = rp.oversoldLevel  || 30;
+    const period = rp.period || 14;
+    const oversold = rp.oversoldLevel || 30;
     const overbought = rp.overboughtLevel || 70;
 
     if (klines.length >= period + 2) {
@@ -408,7 +403,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
 
         if (volumeOk) {
           if (prev < oversold && curr >= oversold) {
-            signals.push({ strategy: "rsi", direction: "long",  strength: 0.75, description: `RSI ${curr.toFixed(1)} crossed above ${oversold} + 1H vol ✓` });
+            signals.push({ strategy: "rsi", direction: "long", strength: 0.75, description: `RSI ${curr.toFixed(1)} crossed above ${oversold} + 1H vol ✓` });
           } else if (prev > overbought && curr <= overbought) {
             signals.push({ strategy: "rsi", direction: "short", strength: 0.75, description: `RSI ${curr.toFixed(1)} crossed below ${overbought} + 1H vol ✓` });
           }
@@ -417,7 +412,6 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     }
   }
 
-  // ─── Liquidation Sweep ────────────────────────────────────────────────────
   if (strategies.includes("liquidation")) {
     const klines1h = getKlinesFromCache(symbol, "60", 60);
     if (klines1h.length >= 5) {
@@ -434,9 +428,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
           if (cl.side !== "long") continue;
           if (cl.price >= currentPrice) continue;
           if (nearbyCount(cl.price) > 5) continue;
-          const swept     = sweepCandle.low <= cl.price * 1.002;
+          const swept = sweepCandle.low <= cl.price * 1.002;
           const closed_ok = sweepCandle.close > cl.price;
-          const range     = sweepCandle.high - sweepCandle.low;
+          const range = sweepCandle.high - sweepCandle.low;
           const bodyRatio = range > 0 ? (sweepCandle.close - sweepCandle.low) / range : 0;
           if (swept && closed_ok && bodyRatio > 0.6) {
             signals.push({
@@ -453,9 +447,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
           if (cl.side !== "short") continue;
           if (cl.price <= currentPrice) continue;
           if (nearbyCount(cl.price) > 5) continue;
-          const swept     = sweepCandle.high >= cl.price * 0.998;
+          const swept = sweepCandle.high >= cl.price * 0.998;
           const closed_ok = sweepCandle.close < cl.price;
-          const range     = sweepCandle.high - sweepCandle.low;
+          const range = sweepCandle.high - sweepCandle.low;
           const bodyRatio = range > 0 ? (sweepCandle.close - sweepCandle.low) / range : 0;
           if (swept && closed_ok && bodyRatio < 0.4) {
             signals.push({
@@ -482,16 +476,16 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   }
 
   const strategyMode = (preset.strategyMode as string) || "OR";
-  const longs  = signals.filter(s => s.direction === "long");
+  const longs = signals.filter(s => s.direction === "long");
   const shorts = signals.filter(s => s.direction === "short");
 
   let dominant: "long" | "short" | null = null;
   let domSignals: typeof signals = [];
 
   if (strategyMode === "AND") {
-    const allAgreeOnLong  = longs.length  === strategies.length;
+    const allAgreeOnLong = longs.length === strategies.length;
     const allAgreeOnShort = shorts.length === strategies.length;
-    if (allAgreeOnLong)       { dominant = "long";  domSignals = longs; }
+    if (allAgreeOnLong) { dominant = "long"; domSignals = longs; }
     else if (allAgreeOnShort) { dominant = "short"; domSignals = shorts; }
     else { logger.warn({ symbol, preset: preset.name }, "eval: AND mode — strategies disagree, skip"); return; }
   } else {
@@ -503,7 +497,6 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const avgStrength = domSignals.reduce((s, x) => s + x.strength, 0) / domSignals.length;
   if (avgStrength < 0.5) return;
 
-  // Check positions opened under THIS preset specifically
   const openPositions = await db.select().from(positionsTable)
     .where(and(eq(positionsTable.isOpen, true), eq(positionsTable.mode, mode)));
 
@@ -514,7 +507,6 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     return;
   }
 
-  // Skip if this preset already has a position on this symbol
   const alreadyOpen = presetPositions.find(p => p.symbol === symbol);
   if (alreadyOpen) {
     logger.warn({ symbol, preset: preset.name }, "eval: already has position for this symbol in this preset");
@@ -530,24 +522,23 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
 
   const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
-  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice, marginUsdt);
+  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice);
   if (qty === null) {
     logger.warn({ symbol, rawQty, marginUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
     return;
   }
 
-  // SL/TP: always in USDT amounts from preset; adjust price move to yield target NET PnL after fees
-  const stopLossUsdt   = parseFloat(String(preset.stopLossUsdt   ?? 1));
+  const stopLossUsdt = parseFloat(String(preset.stopLossUsdt ?? 1));
   const takeProfitUsdt = parseFloat(String(preset.takeProfitUsdt ?? 2));
   const feeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.00055));
-  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt,   qty, currentPrice, feeRate, "loss");
+  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt, qty, currentPrice, feeRate, "loss");
   const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, "profit");
   const sl = dominant === "long" ? currentPrice - slPriceMove : currentPrice + slPriceMove;
   const tp = dominant === "long" ? currentPrice + tpPriceMove : currentPrice - tpPriceMove;
 
   let bybitOrderId: string | null = null;
   if (mode === "live") {
-    const side   = dominant === "long" ? "Buy" : "Sell";
+    const side = dominant === "long" ? "Buy" : "Sell";
     const posIdx = dominant === "long" ? 1 : 2;
     try {
       bybitOrderId = await placeMarketOrder(
@@ -588,8 +579,6 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
 
   logger.info({ symbol, side: dominant, price: currentPrice, qty, leverage, strategy: strategyLabel, mode, preset: preset.name }, "Position opened by bot");
 }
-
-// ─── Helper functions ─────────────────────────────────────────────────────────
 
 function computePOC(klines: any[]): number {
   if (!klines.length) return 0;
@@ -655,9 +644,6 @@ function computeATR(klines: any[], period: number = 14): number {
   return recent.reduce((s: number, v: number) => s + v, 0) / recent.length;
 }
 
-// ─── SL/TP + Averaging Monitor ────────────────────────────────────────────────
-
-// Cache presets in memory per cycle to avoid repeated DB reads
 let presetsCache: any[] = [];
 let presetsCacheTime = 0;
 
@@ -695,7 +681,6 @@ export async function checkPositionsTpSl() {
         const sl = pos.stopLoss ? parseFloat(pos.stopLoss) : null;
         const tp = pos.takeProfit ? parseFloat(pos.takeProfit) : null;
 
-        // Look up the preset for this position (for averaging config)
         const preset = pos.presetName ? presetMap.get(pos.presetName) : null;
         const averagingEnabled = preset?.averagingEnabled ?? globalConfig?.averagingEnabled ?? false;
         const averagingThreshold = parseFloat(String(preset?.averagingThresholdPercent ?? globalConfig?.averagingThresholdPercent ?? 80)) / 100;
@@ -705,7 +690,6 @@ export async function checkPositionsTpSl() {
         const stopLossUsdt = parseFloat(String(preset?.stopLossUsdt ?? globalConfig?.stopLossUsdt ?? 1));
         const takeProfitUsdt = parseFloat(String(preset?.takeProfitUsdt ?? globalConfig?.takeProfitUsdt ?? 2));
 
-        // ─── Averaging (DCA) check ─────────────────────────────────────────
         if (averagingEnabled && pos.averageCount < maxAveragingCount && sl) {
           const slDistance = Math.abs(entryPrice - sl);
           const priceMove = pos.side === "long" ? entryPrice - currentPrice : currentPrice - entryPrice;
@@ -714,7 +698,6 @@ export async function checkPositionsTpSl() {
           if (lossRatio >= averagingThreshold) {
             logger.info({ symbol: pos.symbol, preset: pos.presetName, lossRatio: (lossRatio * 100).toFixed(1) + "%" }, "Averaging triggered");
 
-            // Averaging uses averagingAmountUsdt to compute additional qty
             const avgNotional = averagingAmountUsdt * leverage;
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
             const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
@@ -735,17 +718,16 @@ export async function checkPositionsTpSl() {
               continue;
             }
 
-            const newQty   = qty + addQty;
+            const newQty = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
-            // SL/TP in USDT anchored to currentPrice, fee-adjusted so net PnL = target
-            const newSlMove = feeAdjustedPriceMove(stopLossUsdt,   newQty, currentPrice, takerFeeRate, "loss");
-            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry,     takerFeeRate, "profit");
+            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, currentPrice, takerFeeRate, "loss");
+            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate, "profit");
             const newSl = pos.side === "long" ? currentPrice - newSlMove : currentPrice + newSlMove;
-            const newTp = pos.side === "long" ? newEntry + newTpMove    : newEntry - newTpMove;
+            const newTp = pos.side === "long" ? newEntry + newTpMove : newEntry - newTpMove;
 
             if (pos.mode === "live") {
-              const side   = pos.side === "long" ? "Buy" : "Sell";
+              const side = pos.side === "long" ? "Buy" : "Sell";
               const posIdx = pos.side === "long" ? 1 : 2;
               try {
                 const avgOrderId = await placeMarketOrder(pos.symbol, side, addQty, leverage, undefined, undefined, posIdx);
@@ -771,11 +753,6 @@ export async function checkPositionsTpSl() {
           }
         }
 
-        // ─── SL/TP check ─────────────────────────────────────────────────────
-        // SL is only allowed when averaging is not enabled AND the position
-        // has never been averaged. Once averaging has fired at least once
-        // (averageCount > 0) the risks are elevated and the position should
-        // only be exited via take-profit or exchange liquidation.
         const slAllowed = !averagingEnabled && (pos.averageCount ?? 0) === 0;
         if (pos.side === "long") {
           if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
@@ -805,12 +782,8 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
   }
 
   if (pos.mode === "live") {
-    // closeMarketOrder's `side` parameter is the POSITION-opening side (the same side
-    // used when the position was placed: "Buy" for a long, "Sell" for a short).
-    // The function internally derives the close-order direction by inverting that value.
-    // Passing the already-inverted order side here would double-flip the direction.
     const positionSide = pos.side === "long" ? "Buy" : "Sell";
-    const posIdx       = pos.side === "long" ? 1 : 2;
+    const posIdx = pos.side === "long" ? 1 : 2;
     try {
       const closeRes = await closeMarketOrder(pos.symbol, positionSide, parseFloat(pos.quantity), posIdx);
       const exchangeSnapshot = await getClosedPnlSnapshot(pos.symbol, {
@@ -853,9 +826,6 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     }
   }
 
-  // Synthetic slippage is only applied for paper SL exits. For TP exits (and for
-  // live fallback when exchange fill price is unavailable), we keep trigger-price
-  // accounting so tiny TP configurations are not flipped into losses by synthetic math.
   const shouldApplyPaperSlippage = reason === "sl" && pos.mode === "paper";
   const accountedExit = shouldApplyPaperSlippage
     ? (pos.side === "long" ? triggerPrice * (1 - slippagePct) : triggerPrice * (1 + slippagePct))
@@ -873,19 +843,12 @@ function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0)
   const qty = parseFloat(pos.quantity);
   const entry = parseFloat(pos.entryPrice);
   const pnl = pos.side === "long" ? (exitPrice - entry) * qty : (entry - exitPrice) * qty;
-  // Deduct taker fees for both legs: fee = notional × rate, where notional = price × qty.
-  // Total fees = (entry_notional + exit_notional) × takerFeeRate.
   const feesUsdt = takerFeeRate > 0 ? (entry * qty + exitPrice * qty) * takerFeeRate : 0;
   const netPnl = pnl - feesUsdt;
   const pnlPercent = computePnlPercent(netPnl, entry, qty, pos.leverage);
   return { pnl: netPnl, pnlPercent };
 }
 
-/**
- * Convert realized PnL in USDT into return-on-margin percent.
- * Margin is approximated as entryPrice × qty ÷ leverage, so higher leverage
- * produces a larger percent move for the same absolute PnL.
- */
 function computePnlPercent(pnl: number, entryPrice: number, qty: number, leverage: number | null | undefined): number {
   const effectiveLeverage = leverage ?? 1;
   const margin = entryPrice > 0 && qty > 0 ? (entryPrice * qty) / Math.max(effectiveLeverage, 1) : 0;
