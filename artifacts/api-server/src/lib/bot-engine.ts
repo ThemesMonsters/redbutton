@@ -63,6 +63,20 @@ function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow 
     if (li > 0) return li;
     return parseFloat(String(globalConfig?.paperBalance)) || 10000;
   }
+
+  function getAveragingSkipReason(
+    minMarginRequiredUsdt: number,
+    averagingAmountUsdt: number,
+    averagingBalance: number,
+  ): string {
+    if (minMarginRequiredUsdt > averagingAmountUsdt) {
+      return `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
+    }
+    if (minMarginRequiredUsdt > averagingBalance) {
+      return `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
+    }
+    return "quantity could not be rounded to a valid exchange size";
+  }
   return parseFloat(String(globalConfig?.paperBalance)) || 10000;
 }
 
@@ -713,12 +727,7 @@ export async function checkPositionsTpSl() {
               averagingAmountUsdt,
             );
             if (addQty === null) {
-              let skipReason = "quantity could not be rounded to a valid exchange size";
-              if (minMarginRequiredUsdt > averagingAmountUsdt) {
-                skipReason = `minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
-              } else if (minMarginRequiredUsdt > averagingBalance) {
-                skipReason = `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum required margin (${minMarginRequiredUsdt.toFixed(4)} USDT)`;
-              }
+              const skipReason = getAveragingSkipReason(minMarginRequiredUsdt, averagingAmountUsdt, averagingBalance);
               logger.warn(
                 { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minMarginRequiredUsdt, leverage, currentPrice, preset: pos.presetName, skipReason },
                 "Averaging skipped",
@@ -867,6 +876,11 @@ function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0)
   return { pnl: netPnl, pnlPercent };
 }
 
+/**
+ * Convert realized PnL in USDT into return-on-margin percent.
+ * Margin is approximated as entryPrice × qty ÷ leverage, so higher leverage
+ * produces a larger percent move for the same absolute PnL.
+ */
 function computePnlPercent(pnl: number, entryPrice: number, qty: number, leverage: number | null | undefined): number {
   const effectiveLeverage = leverage ?? 1;
   const margin = entryPrice > 0 && qty > 0 ? (entryPrice * qty) / Math.max(effectiveLeverage, 1) : 0;
