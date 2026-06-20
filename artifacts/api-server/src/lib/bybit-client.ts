@@ -337,6 +337,7 @@ export async function getClosedPnlSnapshot(
             // Bybit may publish the closed-pnl record slightly before/after the
             // exact local openedAt timestamp we stored, so allow a small buffer.
             if (openedAtMs && item.updatedTime < openedAtMs - CLOSED_PNL_TIMESTAMP_BUFFER_MS) return false;
+            if (openedAtMs && item.updatedTime > Date.now() + CLOSED_PNL_TIMESTAMP_BUFFER_MS) return false;
             if (qtyTolerance != null && expectedQty != null && Math.abs(item.closedQty - expectedQty) > qtyTolerance) return false;
             return true;
           })

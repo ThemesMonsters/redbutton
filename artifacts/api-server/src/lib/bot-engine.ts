@@ -715,9 +715,9 @@ export async function checkPositionsTpSl() {
             if (addQty === null) {
               let skipReason = "quantity could not be rounded to a valid exchange size";
               if (minAveragingMargin > averagingAmountUsdt) {
-                skipReason = "minimum exchange quantity exceeds configured averaging budget";
+                skipReason = `minimum exchange quantity (${minAveragingMargin.toFixed(4)} USDT) exceeds configured averaging budget (${averagingAmountUsdt.toFixed(4)} USDT)`;
               } else if (minAveragingMargin > averagingBalance) {
-                skipReason = "insufficient balance for minimum exchange quantity";
+                skipReason = `insufficient balance (${averagingBalance.toFixed(4)} USDT) for minimum exchange quantity (${minAveragingMargin.toFixed(4)} USDT)`;
               }
               logger.warn(
                 { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minAveragingMargin, leverage, currentPrice, preset: pos.presetName, skipReason },
