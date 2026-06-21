@@ -501,7 +501,8 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     .where(and(eq(positionsTable.isOpen, true), eq(positionsTable.mode, mode)));
 
   const presetPositions = openPositions.filter(p => p.presetName === preset.name);
-  const maxPositions = preset.maxPositions || 3;
+  // FIX #1: Use maxPositions from preset settings
+  const maxPositions = preset.maxPositions ?? 3;
   if (presetPositions.length >= maxPositions) {
     logger.warn({ symbol, preset: preset.name, open: presetPositions.length, maxPositions }, "eval: max preset positions reached");
     return;
@@ -516,9 +517,10 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   logger.info({ symbol, dominant, avgStrength, mode, preset: preset.name }, "eval: SIGNAL — placing order");
 
   const leverage = preset.leverage || 10;
+  // FIX #2: Use positionSizeUsdt as MARGIN (not multiply by leverage — that's wrong!)
   const marginUsdt = parseFloat(String(preset.positionSizeUsdt ?? 1));
-  const notional = marginUsdt * leverage;
-  const rawQty = notional / currentPrice;
+  // The notional value is for contract sizing, margin is already set
+  const rawQty = marginUsdt / currentPrice;
 
   const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
@@ -800,6 +802,7 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     const posIdx = pos.side === "long" ? 1 : 2;
     try {
       const closeRes = await closeMarketOrder(pos.symbol, positionSide, parseFloat(pos.quantity), posIdx);
+      // FIX #3: Always try to get actual PnL from Bybit first
       const exchangeSnapshot = await getClosedPnlSnapshot(pos.symbol, {
         orderId: closeRes.orderId,
         openedAt: pos.openedAt,
