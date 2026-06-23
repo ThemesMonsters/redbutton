@@ -722,12 +722,12 @@ export async function checkPositionsTpSl() {
           if (lossRatio >= averagingThreshold) {
             logger.info({ symbol: pos.symbol, preset: pos.presetName, lossRatio: (lossRatio * 100).toFixed(1) + "%" }, "Averaging triggered");
 
-            const avgNotional = averagingAmountUsdt * leverage;
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
             const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
+            // Use notional (not margin×leverage) — consistent with how opening qty is calculated.
             const addQty = snapQty(
               pos.symbol,
-              avgNotional / currentPrice,
+              averagingAmountUsdt / currentPrice,
               averagingBalance,
               leverage,
               currentPrice,
@@ -745,9 +745,9 @@ export async function checkPositionsTpSl() {
             const newQty = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
-            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, currentPrice, takerFeeRate, pos.side, "loss");
+            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, newEntry, takerFeeRate, pos.side, "loss");
             const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate, pos.side, "profit");
-            const newSl = pos.side === "long" ? currentPrice - newSlMove : currentPrice + newSlMove;
+            const newSl = pos.side === "long" ? newEntry - newSlMove : newEntry + newSlMove;
             const newTp = pos.side === "long" ? newEntry + newTpMove : newEntry - newTpMove;
 
             if (pos.mode === "live") {
@@ -777,7 +777,8 @@ export async function checkPositionsTpSl() {
           }
         }
 
-        const slAllowed = !averagingEnabled && (pos.averageCount ?? 0) === 0;
+        // Allow software SL when: averaging is disabled, OR max averaging rounds have been exhausted.
+        const slAllowed = !averagingEnabled || (pos.averageCount ?? 0) >= maxAveragingCount;
         if (pos.side === "long") {
           if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
           if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
