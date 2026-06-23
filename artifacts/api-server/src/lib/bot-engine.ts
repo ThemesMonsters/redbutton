@@ -84,40 +84,48 @@ function getAveragingSkipReason(
  * Compute the price move needed so that, after paying both entry and exit taker
  * fees, the net PnL equals `targetUsdt`.
  *
- * For a long TP/short SL (profit direction):
- *   net = (exit - entry) * qty - (entry + exit) * qty * rate  =>  exit = (targetUsdt + entry*qty*(1+rate)) / (qty*(1-rate))
- *   priceMove = exit - entry = (targetUsdt + 2*entry*qty*rate) / (qty*(1-rate))
+ * For moves away from entry (long TP / short SL), exit = entry + move.
+ * For moves toward entry (long SL / short TP), exit = entry - move.
  *
- * For a long SL/short TP (loss direction, targetUsdt is the max loss in USDT):
- *   total_loss = (entry - exit) * qty + (entry + exit) * qty * rate = targetUsdt
- *   priceMove = entry - exit = (targetUsdt - 2*entry*qty*rate) / (qty*(1-rate))
- *   Clamped to >= targetUsdt/qty so we never move the SL closer than the un-adjusted level.
+ * We compute a positive price distance (`move`) that depends on:
+ * - side (`long` / `short`)
+ * - target kind (`profit` / `loss`)
  *
- * Falls back to simple targetUsdt/qty when rate is 0.
+ * Falls back to simple targetUsdt/abs(qty) when fees are disabled.
  */
 function feeAdjustedPriceMove(
   targetUsdt: number,
   qty: number,
   entryPrice: number,
   feeRate: number,
-  direction: "profit" | "loss",
+  side: "long" | "short",
+  targetKind: "profit" | "loss",
 ): number {
-  if (feeRate <= 0 || qty <= 0) return targetUsdt / qty;
+  const absQty = Math.abs(qty);
+  if (absQty <= 0) return 0;
+  if (feeRate <= 0) return targetUsdt / absQty;
   // feeRate >= 1 (100%) is not a realistic Bybit rate; guard against divide-by-zero
   if (feeRate >= 1) {
     logger.warn({ feeRate }, "feeAdjustedPriceMove: unrealistic feeRate >= 1, falling back to no-fee calculation");
-    return targetUsdt / qty;
+    return targetUsdt / absQty;
   }
-  const denom = qty * (1 - feeRate);
-  if (direction === "profit") {
-    // TP: move AWAY from entry — larger price change to cover fees
-    return (targetUsdt + 2 * entryPrice * qty * feeRate) / denom;
-  } else {
-    // SL: move TOWARD entry — smaller price change because fees add to loss
-    const raw = (targetUsdt - 2 * entryPrice * qty * feeRate) / denom;
-    // Never let fees push SL so close that it's inside the raw targetUsdt/qty band
-    return Math.max(raw, targetUsdt / qty);
+
+  const towardEntry = (side === "long" && targetKind === "loss") || (side === "short" && targetKind === "profit");
+  const noFeeMove = targetUsdt / absQty;
+
+  if (towardEntry) {
+    // Toward-entry move: long SL or short TP.
+    // Profit denominator is (1 + fee), loss denominator is (1 - fee).
+    const denom = absQty * (targetKind === "profit" ? (1 + feeRate) : (1 - feeRate));
+    const raw = (targetUsdt + (targetKind === "profit" ? 1 : -1) * 2 * entryPrice * absQty * feeRate) / denom;
+    return targetKind === "loss" ? Math.max(raw, noFeeMove) : raw;
   }
+
+  // Away-from-entry move: long TP or short SL.
+  // Profit denominator is (1 - fee), loss denominator is (1 + fee).
+  const denom = absQty * (targetKind === "profit" ? (1 - feeRate) : (1 + feeRate));
+  const raw = (targetUsdt + (targetKind === "profit" ? 1 : -1) * 2 * entryPrice * absQty * feeRate) / denom;
+  return targetKind === "loss" ? Math.max(raw, noFeeMove) : raw;
 }
 
 interface BotState {
@@ -533,8 +541,8 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const stopLossUsdt = parseFloat(String(preset.stopLossUsdt ?? 1));
   const takeProfitUsdt = parseFloat(String(preset.takeProfitUsdt ?? 2));
   const feeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.00055));
-  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt, qty, currentPrice, feeRate, "loss");
-  const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, "profit");
+  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt, qty, currentPrice, feeRate, dominant, "loss");
+  const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, dominant, "profit");
   const sl = dominant === "long" ? currentPrice - slPriceMove : currentPrice + slPriceMove;
   const tp = dominant === "long" ? currentPrice + tpPriceMove : currentPrice - tpPriceMove;
 
@@ -737,8 +745,8 @@ export async function checkPositionsTpSl() {
             const newQty = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
-            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, currentPrice, takerFeeRate, "loss");
-            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate, "profit");
+            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, currentPrice, takerFeeRate, pos.side, "loss");
+            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate, pos.side, "profit");
             const newSl = pos.side === "long" ? currentPrice - newSlMove : currentPrice + newSlMove;
             const newTp = pos.side === "long" ? newEntry + newTpMove : newEntry - newTpMove;
 
