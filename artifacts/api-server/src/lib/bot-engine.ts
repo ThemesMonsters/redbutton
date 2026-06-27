@@ -82,14 +82,16 @@ function getAveragingSkipReason(
 
 /**
  * Compute the price move needed so that, after paying both entry and exit taker
- * fees, the net PnL equals `targetUsdt`.
+ * fees, the net |PnL| equals `targetUsdt`.
  *
- * For moves away from entry (long TP / short SL), exit = entry + move.
- * For moves toward entry (long SL / short TP), exit = entry - move.
+ * Convention: SL is always placed BELOW entry; TP is always placed ABOVE entry,
+ * for both long and short positions.  The caller passes targetKind to reflect the
+ * *financial* meaning of the exit for each combination:
  *
- * We compute a positive price distance (`move`) that depends on:
- * - side (`long` / `short`)
- * - target kind (`profit` / `loss`)
+ *   - LONG  SL (below entry — a loss for the long):    side="long",  targetKind="loss"
+ *   - LONG  TP (above entry — a profit for the long):  side="long",  targetKind="profit"
+ *   - SHORT SL (below entry — a profit for the short): side="short", targetKind="profit"
+ *   - SHORT TP (above entry — a loss for the short):   side="short", targetKind="loss"
  *
  * Falls back to simple targetUsdt/abs(qty) when fees are disabled.
  */
@@ -114,14 +116,14 @@ function feeAdjustedPriceMove(
   const noFeeMove = targetUsdt / absQty;
 
   if (towardEntry) {
-    // Toward-entry move: long SL or short TP.
+    // Toward-entry move: LONG SL (loss) or SHORT SL (profit — short closes below entry).
     // Profit denominator is (1 + fee), loss denominator is (1 - fee).
     const denom = absQty * (targetKind === "profit" ? (1 + feeRate) : (1 - feeRate));
     const raw = (targetUsdt + (targetKind === "profit" ? 1 : -1) * 2 * entryPrice * absQty * feeRate) / denom;
     return targetKind === "loss" ? Math.max(raw, noFeeMove) : raw;
   }
 
-  // Away-from-entry move: long TP or short SL.
+  // Away-from-entry move: LONG TP (profit) or SHORT TP (loss — short closes above entry).
   // Profit denominator is (1 - fee), loss denominator is (1 + fee).
   const denom = absQty * (targetKind === "profit" ? (1 - feeRate) : (1 + feeRate));
   const raw = (targetUsdt + (targetKind === "profit" ? 1 : -1) * 2 * entryPrice * absQty * feeRate) / denom;
@@ -541,10 +543,16 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const stopLossUsdt = parseFloat(String(preset.stopLossUsdt ?? 1));
   const takeProfitUsdt = parseFloat(String(preset.takeProfitUsdt ?? 2));
   const feeRate = parseFloat(String(globalConfig?.takerFeeRate ?? 0.00055));
-  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt, qty, currentPrice, feeRate, dominant, "loss");
-  const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, dominant, "profit");
-  const sl = dominant === "long" ? currentPrice - slPriceMove : currentPrice + slPriceMove;
-  const tp = dominant === "long" ? currentPrice + tpPriceMove : currentPrice - tpPriceMove;
+  // Fix: for SHORT positions SL is placed below entry (a profit for the short),
+  // and TP is placed above entry (a loss for the short).  Pass the correct
+  // targetKind so the fee-adjustment formula matches the financial direction.
+  const slPriceMove = feeAdjustedPriceMove(stopLossUsdt, qty, currentPrice, feeRate, dominant,
+    dominant === "short" ? "profit" : "loss");
+  const tpPriceMove = feeAdjustedPriceMove(takeProfitUsdt, qty, currentPrice, feeRate, dominant,
+    dominant === "short" ? "loss" : "profit");
+  // SL is always placed below entry; TP always above entry (both sides).
+  const sl = currentPrice - slPriceMove;
+  const tp = currentPrice + tpPriceMove;
 
   logger.info({
     symbol,
@@ -566,10 +574,16 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     const side = dominant === "long" ? "Buy" : "Sell";
     const posIdx = dominant === "long" ? 1 : 2;
     try {
+      // Bybit convention: SHORT stopLoss must be ABOVE current price; SHORT takeProfit below.
+      // Our internal convention: sl < entry, tp > entry for all positions.
+      // For SHORT: swap so Bybit receives the correct parameters.
+      const bybitSl = dominant === "short" ? tp : sl;
+      const bybitTp = dominant === "short" ? sl : tp;
       bybitOrderId = await placeMarketOrder(
         symbol, side, qty, leverage,
-        preset.averagingEnabled ? undefined : sl,
-        tp, posIdx,
+        preset.averagingEnabled ? undefined : (bybitSl > 0 ? bybitSl : undefined),
+        bybitTp > 0 ? bybitTp : undefined,
+        posIdx,
       );
       if (!bybitOrderId) {
         logger.error({ symbol, side, preset: preset.name }, "placeMarketOrder returned null — skipping");
@@ -619,7 +633,13 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
         try {
           // SL is omitted: on Bybit, SL/TP applies to the whole position via setPositionTpSl,
           // not to individual market orders. The main position's TP covers this order.
-          avgBybitOrderId = await placeMarketOrder(symbol, side, avgQty, leverage, undefined, tp, posIdx);
+          // For SHORT: our sl (below entry) maps to Bybit takeProfit; our tp (above) to Bybit stopLoss.
+          const avgBybitTp = dominant === "short" ? sl : tp; // Bybit takeProfit: below entry for SHORT
+          const avgBybitSl = dominant === "short" ? tp : undefined; // Bybit stopLoss: above entry for SHORT
+          avgBybitOrderId = await placeMarketOrder(symbol, side, avgQty, leverage,
+            avgBybitSl != null && avgBybitSl > 0 ? avgBybitSl : undefined,
+            avgBybitTp > 0 ? avgBybitTp : undefined,
+            posIdx);
           logger.info({ symbol, side, avgQty, avgMarginUsdt, avgNotionalUsdt, tp }, "Averaging order placed at position open");
         } catch (err) {
           logger.error({ err, symbol, preset: preset.name }, "Failed to place averaging order at open — skipping");
@@ -765,7 +785,8 @@ export async function checkPositionsTpSl() {
 
         if (averagingEnabled && pos.averageCount < maxAveragingCount && sl) {
           const slDistance = Math.abs(entryPrice - sl);
-          const priceMove = pos.side === "long" ? entryPrice - currentPrice : currentPrice - entryPrice;
+          // SL is always below entry: approaching SL means price falling (entryPrice > currentPrice).
+          const priceMove = entryPrice - currentPrice;
           const lossRatio = slDistance > 0 ? priceMove / slDistance : 0;
 
           if (lossRatio >= averagingThreshold) {
@@ -794,10 +815,13 @@ export async function checkPositionsTpSl() {
             const newQty = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
-            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, newEntry, takerFeeRate, pos.side, "loss");
-            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate, pos.side, "profit");
-            const newSl = pos.side === "long" ? newEntry - newSlMove : newEntry + newSlMove;
-            const newTp = pos.side === "long" ? newEntry + newTpMove : newEntry - newTpMove;
+            const newSlMove = feeAdjustedPriceMove(stopLossUsdt, newQty, newEntry, takerFeeRate,
+              pos.side, pos.side === "short" ? "profit" : "loss");
+            const newTpMove = feeAdjustedPriceMove(takeProfitUsdt, newQty, newEntry, takerFeeRate,
+              pos.side, pos.side === "short" ? "loss" : "profit");
+            // SL always below entry, TP always above entry (both sides).
+            const newSl = newEntry - newSlMove;
+            const newTp = newEntry + newTpMove;
 
             if (pos.mode === "live") {
               const side = pos.side === "long" ? "Buy" : "Sell";
@@ -805,7 +829,13 @@ export async function checkPositionsTpSl() {
               try {
                 const avgOrderId = await placeMarketOrder(pos.symbol, side, addQty, leverage, undefined, undefined, posIdx);
                 if (!avgOrderId) throw new Error("placeMarketOrder returned null");
-                await setPositionTpSl(pos.symbol, side, newSl, newTp);
+                // For SHORT: our newSl (below entry) = Bybit takeProfit; newTp (above) = Bybit stopLoss.
+                const bybitSl = pos.side === "short" ? newTp : newSl;
+                const bybitTp = pos.side === "short" ? newSl : newTp;
+                await setPositionTpSl(pos.symbol, side,
+                  bybitSl > 0 ? bybitSl : undefined,
+                  bybitTp > 0 ? bybitTp : undefined,
+                );
               } catch (err) {
                 logger.error({ err, symbol: pos.symbol }, "Failed to place averaging order");
                 continue;
@@ -828,13 +858,10 @@ export async function checkPositionsTpSl() {
 
         // Allow software SL when: averaging is disabled, OR max averaging rounds have been exhausted.
         const slAllowed = !averagingEnabled || (pos.averageCount ?? 0) >= maxAveragingCount;
-        if (pos.side === "long") {
-          if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
-          if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
-        } else {
-          if (sl && currentPrice >= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
-          if (tp && currentPrice <= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
-        }
+        // SL is always below entry (trigger when price falls to/below sl).
+        // TP is always above entry (trigger when price rises to/above tp).
+        if (sl && currentPrice <= sl && slAllowed) { await closePosition(pos, sl, slippagePct, "sl", takerFeeRate); continue; }
+        if (tp && currentPrice >= tp) { await closePosition(pos, tp, slippagePct, "tp", takerFeeRate); continue; }
       } finally {
         processingPositionIds.delete(pos.id);
       }
