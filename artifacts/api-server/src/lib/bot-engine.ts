@@ -30,6 +30,7 @@ const QTY_RULES: Record<string, { min: number; step: number; decimals: number }>
   MATICUSDT:{ min: 1,      step: 1,      decimals: 0 },
 };
 const DEFAULT_QTY_RULE = { min: 0.01, step: 0.01, decimals: 2 };
+const USDT_NOTIONAL_TOLERANCE = 0.03;
 
 function getMinMarginRequired(symbol: string, currentPrice: number, leverage: number): number {
   const rule = QTY_RULES[symbol] ?? DEFAULT_QTY_RULE;
@@ -52,6 +53,50 @@ function snapQty(
   if (maxMarginUsdt != null && minMarginRequired > maxMarginUsdt) return null;
   if (minMarginRequired <= effectiveBalance) return rule.min;
   return null;
+}
+
+function getQtyForTargetMarginUsdt(
+  symbol: string,
+  targetMarginUsdt: number,
+  leverage: number,
+  currentPrice: number,
+  effectiveBalance: number,
+): { qty: number | null; notionalUsdt: number; marginUsdt: number; deviationUsdt: number; skipReason?: string } {
+  const safeLeverage = Math.max(leverage, 1);
+  const targetNotionalUsdt = targetMarginUsdt * safeLeverage;
+  const rawQty = targetNotionalUsdt / Math.max(currentPrice, Number.EPSILON);
+  const qty = snapQty(symbol, rawQty, effectiveBalance, safeLeverage, currentPrice, targetMarginUsdt);
+
+  if (qty === null) {
+    return {
+      qty: null,
+      notionalUsdt: 0,
+      marginUsdt: 0,
+      deviationUsdt: targetMarginUsdt,
+      skipReason: "quantity could not be rounded to a valid exchange size within configured USDT margin",
+    };
+  }
+
+  const actualNotionalUsdt = qty * currentPrice;
+  const actualMarginUsdt = actualNotionalUsdt / safeLeverage;
+  const deviationUsdt = Math.abs(actualMarginUsdt - targetMarginUsdt);
+
+  if (targetMarginUsdt > 0 && deviationUsdt > targetMarginUsdt * USDT_NOTIONAL_TOLERANCE) {
+    return {
+      qty: null,
+      notionalUsdt: actualNotionalUsdt,
+      marginUsdt: actualMarginUsdt,
+      deviationUsdt,
+      skipReason: `actual margin ${actualMarginUsdt.toFixed(4)} USDT deviates from target ${targetMarginUsdt.toFixed(4)} USDT by more than ${(USDT_NOTIONAL_TOLERANCE * 100).toFixed(1)}%`,
+    };
+  }
+
+  return {
+    qty,
+    notionalUsdt: actualNotionalUsdt,
+    marginUsdt: actualMarginUsdt,
+    deviationUsdt,
+  };
 }
 
 function getEffectiveBalance(mode: "live" | "paper", globalConfig: BotConfigRow | undefined): number {
@@ -525,18 +570,28 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   logger.info({ symbol, dominant, avgStrength, mode, preset: preset.name }, "eval: SIGNAL — placing order");
 
   const leverage = preset.leverage || 10;
-  // positionSizeUsdt is treated as MARGIN; notional = margin × leverage
-  const marginUsdt = parseFloat(String(preset.positionSizeUsdt ?? 1));
-  const notionalUsdt = marginUsdt * leverage;
-  const rawQty = notionalUsdt / currentPrice;
-
+  const targetMarginUsdt = parseFloat(String(preset.positionSizeUsdt ?? 1));
   const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
-  const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice);
-  if (qty === null) {
-    logger.warn({ symbol, rawQty, marginUsdt, notionalUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
+  const entrySize = getQtyForTargetMarginUsdt(symbol, targetMarginUsdt, leverage, currentPrice, effectiveBalance);
+  if (entrySize.qty === null) {
+    logger.warn({
+      symbol,
+      targetMarginUsdt,
+      leverage,
+      currentPrice,
+      effectiveBalance,
+      preset: preset.name,
+      skipReason: entrySize.skipReason,
+      actualMarginUsdt: entrySize.marginUsdt,
+      deviationUsdt: entrySize.deviationUsdt,
+    }, "order skipped — unable to satisfy Position size (USDT)");
     return;
   }
+
+  const qty = entrySize.qty;
+  const notionalUsdt = entrySize.notionalUsdt;
+  const marginUsdt = entrySize.marginUsdt;
 
   const stopLossUsdt = parseFloat(String(preset.stopLossUsdt ?? 1));
   const takeProfitUsdt = parseFloat(String(preset.takeProfitUsdt ?? 2));
@@ -550,6 +605,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     symbol,
     dominant,
     currentPrice,
+    targetMarginUsdt,
     marginUsdt,
     notionalUsdt,
     qty,
@@ -602,16 +658,15 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     and(eq(signalsTable.symbol, symbol), eq(signalsTable.acted, false))
   );
 
-  logger.info({ symbol, side: dominant, price: currentPrice, qty, marginUsdt, notionalUsdt, leverage, strategy: strategyLabel, mode, preset: preset.name }, "Position opened by bot");
+  logger.info({ symbol, side: dominant, price: currentPrice, qty, targetMarginUsdt, marginUsdt, notionalUsdt, leverage, strategy: strategyLabel, mode, preset: preset.name }, "Position opened by bot");
 
   // Place averaging order immediately if averaging is enabled
   if (preset.averagingEnabled && mainPos) {
-    const avgMarginUsdt = parseFloat(String(preset.averagingAmountUsdt ?? preset.positionSizeUsdt ?? 1));
-    const avgNotionalUsdt = avgMarginUsdt * leverage;
-    const avgRawQty = avgNotionalUsdt / currentPrice;
-    const avgQty = snapQty(symbol, avgRawQty, effectiveBalance, leverage, currentPrice);
+    const averagingTargetMarginUsdt = parseFloat(String(preset.averagingAmountUsdt ?? preset.positionSizeUsdt ?? 1));
+    const avgSize = getQtyForTargetMarginUsdt(symbol, averagingTargetMarginUsdt, leverage, currentPrice, effectiveBalance);
 
-    if (avgQty !== null) {
+    if (avgSize.qty !== null) {
+      const avgQty = avgSize.qty;
       let avgBybitOrderId: string | null = null;
       if (mode === "live") {
         const side = dominant === "long" ? "Buy" : "Sell";
@@ -620,7 +675,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
           // SL is omitted: on Bybit, SL/TP applies to the whole position via setPositionTpSl,
           // not to individual market orders. The main position's TP covers this order.
           avgBybitOrderId = await placeMarketOrder(symbol, side, avgQty, leverage, undefined, tp, posIdx);
-          logger.info({ symbol, side, avgQty, avgMarginUsdt, avgNotionalUsdt, tp }, "Averaging order placed at position open");
+          logger.info({ symbol, side, avgQty, averagingTargetMarginUsdt, avgMarginUsdt: avgSize.marginUsdt, avgNotionalUsdt: avgSize.notionalUsdt, tp }, "Averaging order placed at position open");
         } catch (err) {
           logger.error({ err, symbol, preset: preset.name }, "Failed to place averaging order at open — skipping");
         }
@@ -645,9 +700,18 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
         parentPositionId: mainPos.id,
       });
 
-      logger.info({ symbol, avgQty, avgMarginUsdt, parentPositionId: mainPos.id }, "Averaging child position recorded");
+      logger.info({ symbol, avgQty, averagingTargetMarginUsdt, avgMarginUsdt: avgSize.marginUsdt, parentPositionId: mainPos.id }, "Averaging child position recorded");
     } else {
-      logger.warn({ symbol, avgRawQty, avgMarginUsdt, avgNotionalUsdt, leverage, preset: preset.name }, "Averaging order skipped — qty below minimum");
+      logger.warn({
+        symbol,
+        averagingTargetMarginUsdt,
+        leverage,
+        currentPrice,
+        preset: preset.name,
+        skipReason: avgSize.skipReason,
+        avgMarginUsdt: avgSize.marginUsdt,
+        deviationUsdt: avgSize.deviationUsdt,
+      }, "Averaging order skipped — unable to satisfy averaging amount (USDT)");
     }
   }
 }
@@ -773,24 +837,29 @@ export async function checkPositionsTpSl() {
 
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
             const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
-            // averagingAmountUsdt is a margin amount; notional = margin × leverage
-            const addQty = snapQty(
-              pos.symbol,
-              (averagingAmountUsdt * leverage) / currentPrice,
-              averagingBalance,
-              leverage,
-              currentPrice,
-              averagingAmountUsdt,
-            );
-            if (addQty === null) {
-              const skipReason = getAveragingSkipReason(minMarginRequiredUsdt, averagingAmountUsdt, averagingBalance);
+            const addSize = getQtyForTargetMarginUsdt(pos.symbol, averagingAmountUsdt, leverage, currentPrice, averagingBalance);
+
+            if (addSize.qty === null) {
+              const skipReason = addSize.skipReason ?? getAveragingSkipReason(minMarginRequiredUsdt, averagingAmountUsdt, averagingBalance);
               logger.warn(
-                { symbol: pos.symbol, averagingAmountUsdt, averagingBalance, minMarginRequiredUsdt, leverage, currentPrice, preset: pos.presetName, skipReason },
+                {
+                  symbol: pos.symbol,
+                  averagingAmountUsdt,
+                  averagingBalance,
+                  minMarginRequiredUsdt,
+                  leverage,
+                  currentPrice,
+                  preset: pos.presetName,
+                  skipReason,
+                  actualMarginUsdt: addSize.marginUsdt,
+                  deviationUsdt: addSize.deviationUsdt,
+                },
                 "Averaging skipped",
               );
               continue;
             }
 
+            const addQty = addSize.qty;
             const newQty = qty + addQty;
             const newEntry = (entryPrice * qty + currentPrice * addQty) / newQty;
 
