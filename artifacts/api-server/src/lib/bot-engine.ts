@@ -640,7 +640,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
             avgBybitSl != null && avgBybitSl > 0 ? avgBybitSl : undefined,
             avgBybitTp > 0 ? avgBybitTp : undefined,
             posIdx);
-          logger.info({ symbol, side, avgQty, avgMarginUsdt, avgNotionalUsdt, tp }, "Averaging order placed at position open");
+          logger.info({ symbol, side, avgQty, avgMarginUsdt, avgNotionalUsdt, sl, tp, avgBybitSl, avgBybitTp }, "Averaging order placed at position open");
         } catch (err) {
           logger.error({ err, symbol, preset: preset.name }, "Failed to place averaging order at open — skipping");
         }
