@@ -1,7 +1,7 @@
 import { db } from "@workspace/db";
 import { botConfigTable, positionsTable, tradesTable, signalsTable, strategyPresetsTable } from "@workspace/db";
 import type { BotConfigRow } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, isNull } from "drizzle-orm";
 import { logger } from "./logger";
 import { hasApiKeys, setPositionTpSl, setApiKeys, placeMarketOrder, closeMarketOrder, getClosedPnlSnapshot } from "./bybit-client";
 import { initMarketFeed, getCurrentPrice, getKlinesFromCache, updateSubscriptions, getLiquidationClusters } from "./market-feed";
@@ -525,16 +525,16 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   logger.info({ symbol, dominant, avgStrength, mode, preset: preset.name }, "eval: SIGNAL — placing order");
 
   const leverage = preset.leverage || 10;
-  // FIX #2: Use positionSizeUsdt as MARGIN (not multiply by leverage — that's wrong!)
+  // positionSizeUsdt is treated as MARGIN; notional = margin × leverage
   const marginUsdt = parseFloat(String(preset.positionSizeUsdt ?? 1));
-  // The notional value is for contract sizing, margin is already set
-  const rawQty = marginUsdt / currentPrice;
+  const notionalUsdt = marginUsdt * leverage;
+  const rawQty = notionalUsdt / currentPrice;
 
   const effectiveBalance = getEffectiveBalance(mode, globalConfig);
 
   const qty = snapQty(symbol, rawQty, effectiveBalance, leverage, currentPrice);
   if (qty === null) {
-    logger.warn({ symbol, rawQty, marginUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
+    logger.warn({ symbol, rawQty, marginUsdt, notionalUsdt, leverage, preset: preset.name }, "qty below minimum — skipping");
     return;
   }
 
@@ -546,25 +546,26 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
   const sl = dominant === "long" ? currentPrice - slPriceMove : currentPrice + slPriceMove;
   const tp = dominant === "long" ? currentPrice + tpPriceMove : currentPrice - tpPriceMove;
 
+  logger.info({
+    symbol,
+    dominant,
+    currentPrice,
+    marginUsdt,
+    notionalUsdt,
+    qty,
+    leverage,
+    stopLossUsdt,
+    takeProfitUsdt,
+    sl,
+    tp,
+    averagingEnabled: preset.averagingEnabled,
+  }, "Placing order — size/SL/TP values");
+
   let bybitOrderId: string | null = null;
   if (mode === "live") {
     const side = dominant === "long" ? "Buy" : "Sell";
     const posIdx = dominant === "long" ? 1 : 2;
     try {
-
-      logger.error({
-        symbol,
-        side,
-        currentPrice,
-        qty,
-        slPriceMove,
-        tpPriceMove,
-        sl,
-        tp,
-        stopLossUsdt,
-        takeProfitUsdt,
-      }, "DEBUG ORDER VALUES");
-
       bybitOrderId = await placeMarketOrder(
         symbol, side, qty, leverage,
         preset.averagingEnabled ? undefined : sl,
@@ -582,7 +583,7 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
 
   const strategyLabel = domSignals.map(s => s.strategy).join("+");
 
-  await db.insert(positionsTable).values({
+  const [mainPos] = await db.insert(positionsTable).values({
     symbol, side: dominant,
     entryPrice: String(currentPrice),
     quantity: String(qty),
@@ -595,13 +596,60 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     averageCount: 0,
     bybitOrderId,
     presetName: preset.name,
-  });
+  }).returning({ id: positionsTable.id });
 
   await db.update(signalsTable).set({ acted: true }).where(
     and(eq(signalsTable.symbol, symbol), eq(signalsTable.acted, false))
   );
 
-  logger.info({ symbol, side: dominant, price: currentPrice, qty, leverage, strategy: strategyLabel, mode, preset: preset.name }, "Position opened by bot");
+  logger.info({ symbol, side: dominant, price: currentPrice, qty, marginUsdt, notionalUsdt, leverage, strategy: strategyLabel, mode, preset: preset.name }, "Position opened by bot");
+
+  // Place averaging order immediately if averaging is enabled
+  if (preset.averagingEnabled && mainPos) {
+    const avgMarginUsdt = parseFloat(String(preset.averagingAmountUsdt ?? preset.positionSizeUsdt ?? 1));
+    const avgNotionalUsdt = avgMarginUsdt * leverage;
+    const avgRawQty = avgNotionalUsdt / currentPrice;
+    const avgQty = snapQty(symbol, avgRawQty, effectiveBalance, leverage, currentPrice);
+
+    if (avgQty !== null) {
+      let avgBybitOrderId: string | null = null;
+      if (mode === "live") {
+        const side = dominant === "long" ? "Buy" : "Sell";
+        const posIdx = dominant === "long" ? 1 : 2;
+        try {
+          // SL is omitted: on Bybit, SL/TP applies to the whole position via setPositionTpSl,
+          // not to individual market orders. The main position's TP covers this order.
+          avgBybitOrderId = await placeMarketOrder(symbol, side, avgQty, leverage, undefined, tp, posIdx);
+          logger.info({ symbol, side, avgQty, avgMarginUsdt, avgNotionalUsdt, tp }, "Averaging order placed at position open");
+        } catch (err) {
+          logger.error({ err, symbol, preset: preset.name }, "Failed to place averaging order at open — skipping");
+        }
+      }
+
+      // SL/TP stored here mirrors the main position for accounting (paper trading).
+      // Child positions are excluded from the SL/TP check loop and are closed
+      // explicitly when the main (parent) position closes.
+      await db.insert(positionsTable).values({
+        symbol, side: dominant,
+        entryPrice: String(currentPrice),
+        quantity: String(avgQty),
+        leverage,
+        strategy: strategyLabel + "+avg",
+        mode,
+        stopLoss: String(sl),
+        takeProfit: String(tp),
+        isOpen: true,
+        averageCount: 0,
+        bybitOrderId: avgBybitOrderId,
+        presetName: preset.name,
+        parentPositionId: mainPos.id,
+      });
+
+      logger.info({ symbol, avgQty, avgMarginUsdt, parentPositionId: mainPos.id }, "Averaging child position recorded");
+    } else {
+      logger.warn({ symbol, avgRawQty, avgMarginUsdt, avgNotionalUsdt, leverage, preset: preset.name }, "Averaging order skipped — qty below minimum");
+    }
+  }
 }
 
 function computePOC(klines: any[]): number {
@@ -690,7 +738,8 @@ export async function checkPositionsTpSl() {
     const presets = await getCachedPresets();
     const presetMap = new Map<string, any>(presets.map(p => [p.name, p]));
 
-    const positions = await db.select().from(positionsTable).where(eq(positionsTable.isOpen, true));
+    const positions = await db.select().from(positionsTable)
+      .where(and(eq(positionsTable.isOpen, true), isNull(positionsTable.parentPositionId)));
 
     for (const pos of positions) {
       if (processingPositionIds.has(pos.id)) continue;
@@ -724,10 +773,10 @@ export async function checkPositionsTpSl() {
 
             const averagingBalance = getEffectiveBalance(pos.mode, globalConfig);
             const minMarginRequiredUsdt = getMinMarginRequired(pos.symbol, currentPrice, leverage);
-            // Use notional (not margin×leverage) — consistent with how opening qty is calculated.
+            // averagingAmountUsdt is a margin amount; notional = margin × leverage
             const addQty = snapQty(
               pos.symbol,
-              averagingAmountUsdt / currentPrice,
+              (averagingAmountUsdt * leverage) / currentPrice,
               averagingBalance,
               leverage,
               currentPrice,
@@ -756,7 +805,7 @@ export async function checkPositionsTpSl() {
               try {
                 const avgOrderId = await placeMarketOrder(pos.symbol, side, addQty, leverage, undefined, undefined, posIdx);
                 if (!avgOrderId) throw new Error("placeMarketOrder returned null");
-                await setPositionTpSl(pos.symbol, side, undefined, newTp);
+                await setPositionTpSl(pos.symbol, side, newSl, newTp);
               } catch (err) {
                 logger.error({ err, symbol: pos.symbol }, "Failed to place averaging order");
                 continue;
@@ -863,6 +912,14 @@ async function closePosition(pos: any, triggerPrice: number, slippagePct: number
     { symbol: pos.symbol, reason, exitPrice: accountedExit, pnl: pnl.pnl.toFixed(4), pnlPercent: pnl.pnlPercent.toFixed(2) + "%", preset: pos.presetName },
     "Position closed by SL/TP",
   );
+
+  // Close any child (averaging) positions that were opened at position entry
+  const childPositions = await db.select().from(positionsTable)
+    .where(and(eq(positionsTable.parentPositionId, pos.id), eq(positionsTable.isOpen, true)));
+  for (const child of childPositions) {
+    logger.info({ symbol: child.symbol, childId: child.id, parentId: pos.id, reason }, "Closing child averaging position");
+    await closePosition(child, triggerPrice, slippagePct, reason, takerFeeRate);
+  }
 }
 
 function computeClosedPnl(pos: any, exitPrice: number, takerFeeRate: number = 0): { pnl: number; pnlPercent: number } {
