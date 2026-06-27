@@ -652,6 +652,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
     averageCount: 0,
     bybitOrderId,
     presetName: preset.name,
+    positionSizeUsdtSnapshot: String(marginUsdt),
+    takeProfitUsdtSnapshot: String(takeProfitUsdt),
+    stopLossUsdtSnapshot: String(stopLossUsdt),
   }).returning({ id: positionsTable.id });
 
   await db.update(signalsTable).set({ acted: true }).where(
@@ -698,6 +701,9 @@ async function evaluateSymbol(symbol: string, preset: any, mode: string, globalC
         bybitOrderId: avgBybitOrderId,
         presetName: preset.name,
         parentPositionId: mainPos.id,
+        positionSizeUsdtSnapshot: String(avgSize.marginUsdt),
+        takeProfitUsdtSnapshot: String(takeProfitUsdt),
+        stopLossUsdtSnapshot: String(stopLossUsdt),
       });
 
       logger.info({ symbol, avgQty, averagingTargetMarginUsdt, avgMarginUsdt: avgSize.marginUsdt, parentPositionId: mainPos.id }, "Averaging child position recorded");

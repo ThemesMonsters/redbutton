@@ -174,6 +174,14 @@ export interface Position {
   bybitOrderId?: string | null;
   /** @nullable */
   presetName?: string | null;
+  /** @nullable */
+  positionSizeUsdtSnapshot?: number | null;
+  /** @nullable */
+  takeProfitUsdtSnapshot?: number | null;
+  /** @nullable */
+  stopLossUsdtSnapshot?: number | null;
+  marginUsdt: number;
+  notionalUsdt: number;
 }
 
 export type PositionInputSide = typeof PositionInputSide[keyof typeof PositionInputSide];
@@ -200,6 +208,13 @@ export interface PositionInput {
   mode: PositionInputMode;
   stopLoss?: number;
   takeProfit?: number;
+}
+
+export interface CloseAllResult {
+  closed: number;
+  failed: number;
+  skipped: number;
+  total: number;
 }
 
 export type TradeSide = typeof TradeSide[keyof typeof TradeSide];

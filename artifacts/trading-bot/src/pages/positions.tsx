@@ -3,6 +3,7 @@ import { Layout } from "@/components/layout";
 import {
   useListPositions,
   useClosePosition,
+  useCloseAllPositions,
   useOpenPosition,
   getListPositionsQueryKey,
   getGetBotStatusQueryKey,
@@ -11,14 +12,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter, DialogDescription } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import { formatDistanceToNow } from "date-fns";
-import { Plus, X } from "lucide-react";
+import { Plus, X, XCircle } from "lucide-react";
 
 function OpenPositionDialog({ onClose }: { onClose: () => void }) {
   const qc = useQueryClient();
@@ -94,25 +95,59 @@ function OpenPositionDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
+function fmt2(v: number | null | undefined) {
+  if (v == null) return "—";
+  return `$${v.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+}
+
 export default function Positions() {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [filter, setFilter] = useState<"all" | "paper" | "live">("all");
+  const [confirmCloseId, setConfirmCloseId] = useState<number | null>(null);
+  const [confirmCloseAll, setConfirmCloseAll] = useState(false);
+
   const { data: positions, isLoading } = useListPositions(
     { mode: filter === "all" ? undefined : filter },
     { query: { refetchInterval: 10000, queryKey: getListPositionsQueryKey({ mode: filter === "all" ? undefined : filter }) } }
   );
   const closePosition = useClosePosition();
+  const closeAllPositions = useCloseAllPositions();
+  const isClosing = closePosition.isPending || closeAllPositions.isPending;
+
+  const invalidatePositions = () => {
+    qc.invalidateQueries({ queryKey: getListPositionsQueryKey({}) });
+    qc.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+  };
 
   const handleClose = (id: number) => {
+    setConfirmCloseId(null);
     closePosition.mutate({ id }, {
       onSuccess: () => {
-        qc.invalidateQueries({ queryKey: getListPositionsQueryKey({}) });
-        qc.invalidateQueries({ queryKey: getGetBotStatusQueryKey() });
+        invalidatePositions();
         toast({ title: "Position closed" });
       },
       onError: () => toast({ title: "Failed to close position", variant: "destructive" }),
+    });
+  };
+
+  const handleCloseAll = () => {
+    setConfirmCloseAll(false);
+    const modeParam = filter === "all" ? undefined : filter;
+    closeAllPositions.mutate({ params: modeParam ? { mode: modeParam } : undefined }, {
+      onSuccess: (result) => {
+        invalidatePositions();
+        const parts: string[] = [`Closed ${result.closed}`];
+        if (result.failed > 0) parts.push(`${result.failed} failed`);
+        if (result.skipped > 0) parts.push(`${result.skipped} skipped`);
+        toast({
+          title: result.failed > 0 ? "Close All — partial" : "Close All — done",
+          description: parts.join(" · "),
+          variant: result.failed > 0 ? "destructive" : "default",
+        });
+      },
+      onError: () => toast({ title: "Failed to close all positions", variant: "destructive" }),
     });
   };
 
@@ -133,6 +168,17 @@ export default function Positions() {
                 <SelectItem value="live" className="text-xs font-mono">LIVE</SelectItem>
               </SelectContent>
             </Select>
+            {(positions?.length ?? 0) > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="h-7 text-xs font-mono gap-1 rounded-sm border-destructive/40 text-destructive hover:bg-destructive/10"
+                onClick={() => setConfirmCloseAll(true)}
+                disabled={isClosing}
+              >
+                <XCircle className="w-3 h-3" /> Close All
+              </Button>
+            )}
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="h-7 text-xs bg-chart-1 hover:bg-chart-1/80 text-background font-mono gap-1 rounded-sm">
@@ -146,6 +192,44 @@ export default function Positions() {
             </Dialog>
           </div>
         </div>
+
+        {/* Confirm single close dialog */}
+        <Dialog open={confirmCloseId !== null} onOpenChange={open => { if (!open) setConfirmCloseId(null); }}>
+          <DialogContent className="max-w-xs">
+            <DialogHeader>
+              <DialogTitle className="text-sm font-mono">Close Position</DialogTitle>
+              <DialogDescription className="text-xs">
+                Are you sure you want to close this position? In live mode this will execute on Bybit.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" size="sm" className="h-7 text-xs font-mono" onClick={() => setConfirmCloseId(null)}>Cancel</Button>
+              <Button variant="destructive" size="sm" className="h-7 text-xs font-mono" onClick={() => confirmCloseId !== null && handleClose(confirmCloseId)} disabled={isClosing}>
+                {isClosing ? "Closing..." : "Close"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Confirm close-all dialog */}
+        <Dialog open={confirmCloseAll} onOpenChange={setConfirmCloseAll}>
+          <DialogContent className="max-w-xs">
+            <DialogHeader>
+              <DialogTitle className="text-sm font-mono">Close All Positions</DialogTitle>
+              <DialogDescription className="text-xs">
+                Close all {(positions?.length ?? 0)} open position{(positions?.length ?? 0) !== 1 ? "s" : ""}
+                {filter !== "all" ? ` (${filter.toUpperCase()} only)` : ""}?
+                In live mode this will execute market orders on Bybit.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" size="sm" className="h-7 text-xs font-mono" onClick={() => setConfirmCloseAll(false)}>Cancel</Button>
+              <Button variant="destructive" size="sm" className="h-7 text-xs font-mono" onClick={handleCloseAll} disabled={isClosing}>
+                {isClosing ? "Closing..." : "Close All"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         <div className="bg-card border border-border/60 rounded-sm overflow-hidden">
           {isLoading ? (
@@ -164,7 +248,10 @@ export default function Positions() {
                     <th className="text-left px-3 py-2.5">Side</th>
                     <th className="text-right px-3 py-2.5">Entry</th>
                     <th className="text-right px-3 py-2.5">Current</th>
-                    <th className="text-right px-3 py-2.5">Qty</th>
+                    <th className="text-right px-3 py-2.5">Margin</th>
+                    <th className="text-right px-3 py-2.5">Notional</th>
+                    <th className="text-right px-3 py-2.5">TP (USDT)</th>
+                    <th className="text-right px-3 py-2.5">SL (USDT)</th>
                     <th className="text-right px-3 py-2.5">Lev</th>
                     <th className="text-right px-3 py-2.5">P&L</th>
                     <th className="text-right px-3 py-2.5">P&L%</th>
@@ -185,7 +272,10 @@ export default function Positions() {
                       </td>
                       <td className="px-3 py-3 text-right">${parseFloat(String(p.entryPrice)).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
                       <td className="px-3 py-3 text-right">${parseFloat(String(p.currentPrice)).toLocaleString(undefined, { maximumFractionDigits: 2 })}</td>
-                      <td className="px-3 py-3 text-right">{parseFloat(String(p.quantity)).toFixed(4)}</td>
+                      <td className="px-3 py-3 text-right">{fmt2(p.positionSizeUsdtSnapshot ?? p.marginUsdt)}</td>
+                      <td className="px-3 py-3 text-right">{fmt2(p.notionalUsdt)}</td>
+                      <td className="px-3 py-3 text-right text-chart-1/80">{fmt2(p.takeProfitUsdtSnapshot)}</td>
+                      <td className="px-3 py-3 text-right text-destructive/80">{fmt2(p.stopLossUsdtSnapshot)}</td>
                       <td className="px-3 py-3 text-right">{p.leverage}x</td>
                       <td className={cn("px-3 py-3 text-right font-bold", p.unrealizedPnl >= 0 ? "text-chart-1" : "text-destructive")}>
                         {p.unrealizedPnl >= 0 ? "+" : ""}${parseFloat(String(p.unrealizedPnl)).toFixed(2)}
@@ -199,7 +289,7 @@ export default function Positions() {
                       </td>
                       <td className="px-3 py-3 text-muted-foreground text-[10px]">{formatDistanceToNow(new Date(p.openedAt), { addSuffix: true })}</td>
                       <td className="px-3 py-3">
-                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-destructive/20 hover:text-destructive" onClick={() => handleClose(p.id)} disabled={closePosition.isPending}>
+                        <Button variant="ghost" size="sm" className="h-6 w-6 p-0 hover:bg-destructive/20 hover:text-destructive" onClick={() => setConfirmCloseId(p.id)} disabled={isClosing}>
                           <X className="w-3 h-3" />
                         </Button>
                       </td>

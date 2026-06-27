@@ -26,6 +26,7 @@ import type {
   BotConfig,
   BotConfigInput,
   BotStatus,
+  CloseAllResult,
   DailyPnl,
   DeleteStrategyPreset200,
   GetDailyPnlParams,
@@ -2476,5 +2477,58 @@ export const useDeleteStrategyPreset = <TError = ErrorType<unknown>,
         TContext
       > => {
       return useMutation(getDeleteStrategyPresetMutationOptions(options));
+    }
+
+
+export const getCloseAllPositionsUrl = (params?: ListPositionsParams) => {
+  const queryParams = params?.mode ? `?mode=${params.mode}` : '';
+  return `/api/positions/close-all${queryParams}`
+}
+
+/**
+ * @summary Close all open positions (executes on Bybit for live mode)
+ */
+export const closeAllPositions = async (params?: ListPositionsParams, options?: RequestInit): Promise<CloseAllResult> => {
+  return customFetch<CloseAllResult>(getCloseAllPositionsUrl(params),
+  {
+    ...options,
+    method: 'POST',
+  }
+);}
+
+export const getCloseAllPositionsMutationOptions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeAllPositions>>, TError,{params?: ListPositionsParams}, TContext>, request?: SecondParameter<typeof customFetch>}
+): UseMutationOptions<Awaited<ReturnType<typeof closeAllPositions>>, TError,{params?: ListPositionsParams}, TContext> => {
+
+const mutationKey = ['closeAllPositions'];
+const {mutation: mutationOptions, request: requestOptions} = options ?
+      options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey ?
+      options
+      : {...options, mutation: {...options.mutation, mutationKey}}
+      : {mutation: { mutationKey, }, request: undefined};
+
+      const mutationFn: MutationFunction<Awaited<ReturnType<typeof closeAllPositions>>, {params?: ListPositionsParams}> = (props) => {
+          const {params} = props ?? {};
+          return closeAllPositions(params, requestOptions)
+        }
+
+  return { mutationFn, ...mutationOptions }}
+
+    export type CloseAllPositionsMutationResult = NonNullable<Awaited<ReturnType<typeof closeAllPositions>>>
+
+    export type CloseAllPositionsMutationError = ErrorType<unknown>
+
+    /**
+ * @summary Close all open positions
+ */
+export const useCloseAllPositions = <TError = ErrorType<unknown>,
+    TContext = unknown>(options?: { mutation?:UseMutationOptions<Awaited<ReturnType<typeof closeAllPositions>>, TError,{params?: ListPositionsParams}, TContext>, request?: SecondParameter<typeof customFetch>}
+ ): UseMutationResult<
+        Awaited<ReturnType<typeof closeAllPositions>>,
+        TError,
+        {params?: ListPositionsParams},
+        TContext
+      > => {
+      return useMutation(getCloseAllPositionsMutationOptions(options));
     }
 

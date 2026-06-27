@@ -167,6 +167,26 @@ paths:
               schema:
                 $ref: "#/components/schemas/Position"
 
+  /positions/close-all:
+    post:
+      operationId: closeAllPositions
+      tags: [positions]
+      summary: Close all open positions (executes on Bybit for live mode)
+      parameters:
+        - in: query
+          name: mode
+          schema:
+            type: string
+            enum: [paper, live, all]
+          required: false
+      responses:
+        "200":
+          description: Close-all result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CloseAllResult"
+
   /positions/{id}:
     get:
       operationId: getPosition
@@ -847,6 +867,16 @@ components:
           type: ["string", "null"]
         presetName:
           type: ["string", "null"]
+        positionSizeUsdtSnapshot:
+          type: ["number", "null"]
+        takeProfitUsdtSnapshot:
+          type: ["number", "null"]
+        stopLossUsdtSnapshot:
+          type: ["number", "null"]
+        marginUsdt:
+          type: number
+        notionalUsdt:
+          type: number
       required:
         - id
         - symbol
@@ -860,6 +890,8 @@ components:
         - strategy
         - mode
         - openedAt
+        - marginUsdt
+        - notionalUsdt
 
     PositionInput:
       type: object
@@ -886,6 +918,23 @@ components:
         - quantity
         - leverage
         - mode
+
+    CloseAllResult:
+      type: object
+      properties:
+        closed:
+          type: integer
+        failed:
+          type: integer
+        skipped:
+          type: integer
+        total:
+          type: integer
+      required:
+        - closed
+        - failed
+        - skipped
+        - total
 
     Trade:
       type: object
