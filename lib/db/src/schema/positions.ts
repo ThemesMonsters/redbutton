@@ -20,6 +20,9 @@ export const positionsTable = pgTable("positions", {
   presetName: text("preset_name"),
   openedAt: timestamp("opened_at", { withTimezone: true }).notNull().defaultNow(),
   closedAt: timestamp("closed_at", { withTimezone: true }),
+  positionSizeUsdtSnapshot: numeric("position_size_usdt_snapshot", { precision: 20, scale: 8 }),
+  takeProfitUsdtSnapshot: numeric("take_profit_usdt_snapshot", { precision: 20, scale: 8 }),
+  stopLossUsdtSnapshot: numeric("stop_loss_usdt_snapshot", { precision: 20, scale: 8 }),
 });
 
 export const insertPositionSchema = createInsertSchema(positionsTable).omit({ id: true, openedAt: true, closedAt: true });

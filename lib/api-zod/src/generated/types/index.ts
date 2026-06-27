@@ -18,6 +18,7 @@ export * from './botConfigMode';
 export * from './botConfigStrategyMode';
 export * from './botStatus';
 export * from './botStatusMode';
+export * from './closeAllResult';
 export * from './dailyPnl';
 export * from './deleteStrategyPreset200';
 export * from './fibonacciParams';

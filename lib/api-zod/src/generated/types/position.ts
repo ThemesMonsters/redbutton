@@ -29,4 +29,12 @@ export interface Position {
   bybitOrderId?: string | null;
   /** @nullable */
   presetName?: string | null;
+  /** @nullable */
+  positionSizeUsdtSnapshot?: number | null;
+  /** @nullable */
+  takeProfitUsdtSnapshot?: number | null;
+  /** @nullable */
+  stopLossUsdtSnapshot?: number | null;
+  marginUsdt: number;
+  notionalUsdt: number;
 }

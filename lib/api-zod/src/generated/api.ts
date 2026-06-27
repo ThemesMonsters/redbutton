@@ -225,7 +225,12 @@ export const ListPositionsResponseItem = zod.object({
   "takeProfit": zod.number().nullish(),
   "openedAt": zod.string(),
   "bybitOrderId": zod.string().nullish(),
-  "presetName": zod.string().nullish()
+  "presetName": zod.string().nullish(),
+  "positionSizeUsdtSnapshot": zod.number().nullish(),
+  "takeProfitUsdtSnapshot": zod.number().nullish(),
+  "stopLossUsdtSnapshot": zod.number().nullish(),
+  "marginUsdt": zod.number(),
+  "notionalUsdt": zod.number()
 })
 export const ListPositionsResponse = zod.array(ListPositionsResponseItem)
 
@@ -267,7 +272,12 @@ export const GetPositionResponse = zod.object({
   "takeProfit": zod.number().nullish(),
   "openedAt": zod.string(),
   "bybitOrderId": zod.string().nullish(),
-  "presetName": zod.string().nullish()
+  "presetName": zod.string().nullish(),
+  "positionSizeUsdtSnapshot": zod.number().nullish(),
+  "takeProfitUsdtSnapshot": zod.number().nullish(),
+  "stopLossUsdtSnapshot": zod.number().nullish(),
+  "marginUsdt": zod.number(),
+  "notionalUsdt": zod.number()
 })
 
 
@@ -294,7 +304,12 @@ export const ClosePositionResponse = zod.object({
   "takeProfit": zod.number().nullish(),
   "openedAt": zod.string(),
   "bybitOrderId": zod.string().nullish(),
-  "presetName": zod.string().nullish()
+  "presetName": zod.string().nullish(),
+  "positionSizeUsdtSnapshot": zod.number().nullish(),
+  "takeProfitUsdtSnapshot": zod.number().nullish(),
+  "stopLossUsdtSnapshot": zod.number().nullish(),
+  "marginUsdt": zod.number(),
+  "notionalUsdt": zod.number()
 })
 
 
@@ -771,3 +786,16 @@ export const DeleteStrategyPresetResponse = zod.object({
 })
 
 
+/**
+ * @summary Close all open positions (executes on Bybit for live mode)
+ */
+export const CloseAllPositionsQueryParams = zod.object({
+  "mode": zod.enum(['paper', 'live', 'all']).optional()
+})
+
+export const CloseAllPositionsResponse = zod.object({
+  "closed": zod.number(),
+  "failed": zod.number(),
+  "skipped": zod.number(),
+  "total": zod.number()
+})
